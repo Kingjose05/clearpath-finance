@@ -66,7 +66,7 @@ class DebtPlannerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Debt Plan',
+      title: 'ClearPath Finance',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -958,7 +958,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           connectedEmail: result.accountEmail,
           lastEmailSyncStatus: imported == 0
               ? result.message
-              : '$imported purchase emails imported',
+              : '$imported transactions imported',
         ),
       );
       if (!kIsWeb) await widget.backgroundSync.start();
@@ -1004,13 +1004,13 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           lastEmailSyncAt: DateTime.now(),
           lastEmailSyncStatus: imported == 0
               ? result.message
-              : '$imported purchase emails imported',
+              : '$imported transactions imported',
         ),
       );
       await _saveAndRefresh();
       if (!mounted) return;
       _snack(
-        imported == 0 ? result.message : '$imported purchase emails imported.',
+        imported == 0 ? result.message : '$imported transactions imported.',
       );
     } catch (error) {
       if (!mounted) return;
@@ -1030,7 +1030,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       _snack(
         imported == 0
             ? 'Daily sync checked Gmail.'
-            : 'Daily sync imported $imported purchase${imported == 1 ? '' : 's'}.',
+            : 'Daily sync imported $imported transaction${imported == 1 ? '' : 's'}.',
       );
     } catch (error) {
       if (!mounted) return;

@@ -251,6 +251,7 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     'cajero',
     'descripcion',
     'concepto',
+    'valor',
   };
   for (final table in doc.querySelectorAll('table')) {
     List<String>? headers;
@@ -284,8 +285,6 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
   );
   final result = <BankTransaction>[];
   for (final record in records) {
-    final state = _normalize(_field(record, text, 'estado'));
-    if (!{'aprobada', 'aprobado', 'approved'}.contains(state)) continue;
     final type = _normalize(_field(record, text, 'tipo'));
     final context = '$subject $type $normalizedText';
     final kind =
@@ -302,7 +301,15 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
         : RegExp(r'reembolso|devolucion|refund').hasMatch(context)
         ? TransactionKind.refund
         : TransactionKind.purchase;
-    final amountText = _field(record, text, 'monto');
+    final state = _normalize(_field(record, text, 'estado'));
+    final stateRequired =
+        kind == TransactionKind.purchase || kind == TransactionKind.withdrawal;
+    if (stateRequired &&
+        !{'aprobada', 'aprobado', 'approved'}.contains(state)) {
+      continue;
+    }
+    var amountText = _field(record, text, 'monto');
+    if (amountText.isEmpty) amountText = _field(record, text, 'valor');
     final amount = parseBankAmount(amountText);
     if (amount == null || amount <= 0) continue;
     var merchant = _field(record, text, 'comercio');

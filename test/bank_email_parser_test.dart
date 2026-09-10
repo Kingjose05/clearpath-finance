@@ -117,4 +117,22 @@ void main() {
     expect(result.single.category, SpendingCategory.cash);
     expect(result.single.amount, 2000);
   });
+
+  test('recognizes a card payment without a purchase status field', () {
+    final result = parseBankTransactions(
+      bankMessage(
+        from: 'notificaciones@banreservas.com',
+        subject: 'Notificaciones Banreservas - Pago de tarjeta',
+        body: '''
+        Pago de tarjeta confirmado
+        Tarjeta terminada en 5949
+        Monto: DOP 3,500.00
+        Fecha: 10/09/2026
+      ''',
+      ),
+    );
+    expect(result, hasLength(1));
+    expect(result.single.kind, TransactionKind.cardPayment);
+    expect(result.single.amount, 3500);
+  });
 }
