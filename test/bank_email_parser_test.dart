@@ -135,4 +135,26 @@ void main() {
     expect(result.single.kind, TransactionKind.cardPayment);
     expect(result.single.amount, 3500);
   });
+
+  test('supports another bank when its notification has structured fields', () {
+    final result = parseBankTransactions(
+      bankMessage(
+        from: 'alerts@examplebank.com',
+        subject: 'Card transaction approved',
+        body: '''
+        Your debit card ending in 7788 was used.
+        Date: 10/09/2026
+        Currency: DOP
+        Amount: 850.00
+        Merchant: TEST MARKET
+        Status: Approved
+        Transaction type: Purchase
+      ''',
+      ),
+    );
+    expect(result, hasLength(1));
+    expect(result.single.bank, 'Examplebank');
+    expect(result.single.accountType, AccountType.debit);
+    expect(result.single.amount, 850);
+  });
 }

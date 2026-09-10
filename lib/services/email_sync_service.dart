@@ -98,7 +98,8 @@ class GmailPurchaseSyncService {
       'subject:aprobada subject:autorizada subject:retiro subject:pago '
       'subject:deposito "card ending" "tarjeta terminada" '
       '"consumo realizado" "transaccion realizada" "tarjeta de debito" '
-      '"retiro en cajero" "deposito de sueldo"}';
+      '"retiro en cajero" "deposito de sueldo" "payment approved" '
+      '"cash withdrawal"}';
   static final _requests = GmailRequestQueue();
   static bool _syncActive = false;
   final status = ValueNotifier<String>('');

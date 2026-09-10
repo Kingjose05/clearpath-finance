@@ -180,6 +180,18 @@ String _field(Map<String, String> fields, String text, String name) {
   return match?.group(1)?.trim() ?? '';
 }
 
+String _firstField(
+  Map<String, String> fields,
+  String text,
+  List<String> names,
+) {
+  for (final name in names) {
+    final value = _field(fields, text, name);
+    if (value.isNotEmpty) return value;
+  }
+  return '';
+}
+
 DateTime _date(String value, String time, DateTime fallback) {
   final day = RegExp(r'(\d{2})/(\d{2})/(\d{4})').firstMatch(value);
   if (day == null) return fallback;
@@ -203,16 +215,22 @@ DateTime _date(String value, String time, DateTime fallback) {
 List<BankTransaction> parseBankTransactions(gmail.Message message) {
   final from = messageHeader(message, 'from').toLowerCase();
   final sender = RegExp(r'<([^>]+)>').firstMatch(from)?.group(1) ?? from.trim();
-  final bank = switch (sender) {
+  var bank = switch (sender) {
     'alertas@bhd.com.do' => 'BHD',
     'no-reply@apap.com.do' => 'APAP',
     'notificaciones@banreservas.com' => 'Banreservas',
     _ => '',
   };
+  if (bank.isEmpty && sender.contains('@')) {
+    final domain = sender.split('@').last.split('.').first;
+    if (domain.length >= 2) {
+      bank = '${domain[0].toUpperCase()}${domain.substring(1)}';
+    }
+  }
   if (bank.isEmpty) return [];
   final subject = _normalize(messageHeader(message, 'subject'));
   if (!RegExp(
-    r'notificacion|transaccion|consumo|retiro|pago|deposito',
+    r'notificacion|notification|transaccion|transaction|consumo|purchase|retiro|withdrawal|pago|payment|deposito|deposit',
   ).hasMatch(subject)) {
     return [];
   }
@@ -232,7 +250,7 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
   final normalizedText = _normalize(text);
   final accountType =
       RegExp(
-        r'tarjeta (?:de )?debito|cuenta de ahorro|cuenta corriente',
+        r'tarjeta (?:de )?debito|debit card|cuenta de ahorro|cuenta corriente|checking account|savings account',
       ).hasMatch(normalizedText)
       ? AccountType.debit
       : AccountType.credit;
@@ -252,6 +270,13 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     'descripcion',
     'concepto',
     'valor',
+    'date',
+    'time',
+    'currency',
+    'amount',
+    'merchant',
+    'status',
+    'transaction type',
   };
   for (final table in doc.querySelectorAll('table')) {
     List<String>? headers;
@@ -285,7 +310,9 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
   );
   final result = <BankTransaction>[];
   for (final record in records) {
-    final type = _normalize(_field(record, text, 'tipo'));
+    final type = _normalize(
+      _firstField(record, text, const ['tipo', 'transaction type']),
+    );
     final context = '$subject $type $normalizedText';
     final kind =
         RegExp(r'retiro|cajero|\batm\b|avance de efectivo').hasMatch(context)
@@ -301,18 +328,29 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
         : RegExp(r'reembolso|devolucion|refund').hasMatch(context)
         ? TransactionKind.refund
         : TransactionKind.purchase;
-    final state = _normalize(_field(record, text, 'estado'));
+    final state = _normalize(
+      _firstField(record, text, const ['estado', 'status']),
+    );
     final stateRequired =
         kind == TransactionKind.purchase || kind == TransactionKind.withdrawal;
     if (stateRequired &&
-        !{'aprobada', 'aprobado', 'approved'}.contains(state)) {
+        !{
+          'aprobada',
+          'aprobado',
+          'approved',
+          'autorizada',
+          'authorized',
+        }.contains(state)) {
       continue;
     }
-    var amountText = _field(record, text, 'monto');
-    if (amountText.isEmpty) amountText = _field(record, text, 'valor');
+    final amountText = _firstField(record, text, const [
+      'monto',
+      'valor',
+      'amount',
+    ]);
     final amount = parseBankAmount(amountText);
     if (amount == null || amount <= 0) continue;
-    var merchant = _field(record, text, 'comercio');
+    var merchant = _firstField(record, text, const ['comercio', 'merchant']);
     if (merchant.isEmpty) merchant = _field(record, text, 'cajero');
     if (merchant.isEmpty) merchant = _field(record, text, 'descripcion');
     if (merchant.isEmpty) merchant = _field(record, text, 'concepto');
@@ -326,7 +364,9 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
       merchant = 'Salary deposit';
     }
     if (merchant.isEmpty) continue;
-    final money = _normalize('${_field(record, text, 'moneda')} $amountText');
+    final money = _normalize(
+      '${_firstField(record, text, const ['moneda', 'currency'])} $amountText',
+    );
     final currency = RegExp(r'\b(?:usd|us|dolar)').hasMatch(money)
         ? 'USD'
         : RegExp(r'\b(?:rd|dop|pesos)').hasMatch(money)
@@ -341,10 +381,12 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
         currency: currency,
         merchant: merchant,
         date: _date(
-          _field(record, text, 'fecha de transaccion').isNotEmpty
-              ? _field(record, text, 'fecha de transaccion')
-              : _field(record, text, 'fecha'),
-          _field(record, text, 'hora'),
+          _firstField(record, text, const [
+            'fecha de transaccion',
+            'fecha',
+            'date',
+          ]),
+          _firstField(record, text, const ['hora', 'time']),
           fallback,
         ),
         accountType: accountType,
