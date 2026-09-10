@@ -240,8 +240,9 @@ class GmailPurchaseSyncService {
       final profile = await _request(
         () => gmail.GmailApi(client).users.getProfile('me'),
       );
-      if (profile.emailAddress != null)
+      if (profile.emailAddress != null) {
         await _write(_emailKey, profile.emailAddress!);
+      }
       status.value = 'Gmail connected';
       return EmailSyncResult(
         accountEmail: profile.emailAddress,
@@ -342,8 +343,9 @@ class GmailPurchaseSyncService {
     Set<String> excludedMessageIds = const {},
     Future<void> Function(EmailSyncResult)? onBatch,
   }) async {
-    if (_syncActive)
+    if (_syncActive) {
       throw const GmailSyncException('A Gmail sync is already running.');
+    }
     _syncActive = true;
     try {
       return await _syncPurchases(

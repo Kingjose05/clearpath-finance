@@ -75,8 +75,9 @@ SpendingCategory categorizeMerchant(String value) {
 String messageHeader(gmail.Message message, String name) {
   for (final header
       in message.payload?.headers ?? <gmail.MessagePartHeader>[]) {
-    if (header.name?.toLowerCase() == name.toLowerCase())
+    if (header.name?.toLowerCase() == name.toLowerCase()) {
       return header.value ?? '';
+    }
   }
   return '';
 }
@@ -123,8 +124,9 @@ List<String> _parts(gmail.MessagePart? part, String type) {
 String _visibleText(dom.Node node) {
   if (node is dom.Text) return node.data;
   if (node is dom.Element &&
-      ['script', 'style', 'head'].contains(node.localName))
+      ['script', 'style', 'head'].contains(node.localName)) {
     return '';
+  }
   final text = node.nodes.map(_visibleText).join();
   if (node is dom.Element &&
       [
@@ -136,8 +138,9 @@ String _visibleText(dom.Node node) {
         'th',
         'li',
         'table',
-      ].contains(node.localName))
+      ].contains(node.localName)) {
     return '$text\n';
+  }
   return text;
 }
 

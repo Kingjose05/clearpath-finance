@@ -28,7 +28,10 @@ class GmailRequestQueue {
     void Function(String)? onStatus,
   }) {
     final result = _tail.then((_) => _run(request, onStatus));
-    _tail = result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _tail = result.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {},
+    );
     return result;
   }
 

@@ -1,5 +1,7 @@
 import 'dart:async';
-import 'dart:html' as html;
+import 'dart:js_interop';
+
+import 'package:web/web.dart' as web;
 
 class OAuthPopupResult {
   const OAuthPopupResult({
@@ -18,31 +20,32 @@ class OAuthPopupResult {
 Uri? currentWebOAuthRedirectUri() => Uri.base.resolve('auth.html');
 
 String? webGoogleClientIdFromPage() {
-  return html.document
+  return web.document
       .querySelector('meta[name="google-oauth-client-id"]')
       ?.getAttribute('content');
 }
 
 Future<OAuthPopupResult> openOAuthPopup(Uri authorizationUri) {
-  html.window.open(
+  web.window.open(
     authorizationUri.toString(),
     'debt_plan_google_sign_in',
     'popup=yes,width=520,height=680',
   );
   final completer = Completer<OAuthPopupResult>();
-  late final StreamSubscription<html.MessageEvent> listener;
+  late final web.EventListener listener;
   Timer? timeout;
 
   void finish(OAuthPopupResult result) {
     if (completer.isCompleted) return;
     timeout?.cancel();
-    listener.cancel();
+    web.window.removeEventListener('message', listener);
     completer.complete(result);
   }
 
-  listener = html.window.onMessage.listen((event) {
+  listener = ((web.Event rawEvent) {
+    final event = rawEvent as web.MessageEvent;
     if (event.origin != Uri.base.origin) return;
-    final data = event.data;
+    final data = event.data?.dartify();
     if (data is! Map || data['source'] != 'debt-plan-google-oauth') return;
     final accessToken = data['accessToken']?.toString();
     final expiresIn = int.tryParse(data['expiresIn']?.toString() ?? '');
@@ -55,7 +58,8 @@ Future<OAuthPopupResult> openOAuthPopup(Uri authorizationUri) {
         cancelled: data['cancelled'] == true,
       ),
     );
-  });
+  }).toJS;
+  web.window.addEventListener('message', listener);
 
   timeout = Timer(const Duration(minutes: 5), () {
     finish(
