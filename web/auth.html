@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Connecting Gmail</title>
+    <style>
+      body {
+        align-items: center;
+        background: #f4f7f9;
+        color: #16232c;
+        display: flex;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+      }
+      main {
+        max-width: 360px;
+        padding: 24px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Connecting ClearPath</h1>
+      <p>You can close this window if it does not close automatically.</p>
+    </main>
+    <script>
+      const params = new URLSearchParams(
+        (window.location.hash || window.location.search || "").replace(/^[#?]/, ""),
+      );
+      if (window.opener && params.size) {
+        window.opener.postMessage(
+          {
+            source: "debt-plan-google-oauth",
+            accessToken: params.get("access_token"),
+            expiresIn: params.get("expires_in"),
+            error: params.get("error") || params.get("error_description"),
+            cancelled: params.get("error") === "access_denied",
+          },
+          window.location.origin,
+        );
+        window.close();
+      } else if (params.size) {
+        document.querySelector("p").textContent = "Google sign-in could not return to Debt Plan.";
+      }
+    </script>
+  </body>
+</html>
