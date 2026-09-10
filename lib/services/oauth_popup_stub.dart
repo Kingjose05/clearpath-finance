@@ -18,6 +18,6 @@ String? webGoogleClientIdFromPage() => null;
 
 Future<OAuthPopupResult> openOAuthPopup(Uri authorizationUri) async {
   return const OAuthPopupResult(
-    error: 'Google sign-in is available in the web version of Debt Plan.',
+    error: 'Google sign-in is available in the web version of ClearPath.',
   );
 }

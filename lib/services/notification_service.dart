@@ -112,7 +112,7 @@ class ReminderNotificationService {
     await _plugin.show(
       id: 999901,
       title: 'Credit card reminder',
-      body: 'Your suggested payment is ready in Debt Plan.',
+      body: 'Your suggested payment is ready in ClearPath.',
       notificationDetails: _notificationDetails(),
       payload: 'test-reminder',
     );
