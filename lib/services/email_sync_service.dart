@@ -91,15 +91,17 @@ class GmailPurchaseSyncService {
   static const _accessTokenExpiresAtKey = 'gmail_access_token_expires_at';
   static const _emailKey = 'gmail_account_email';
   static const _purchaseSearch =
-      '{from:alertas@bhd.com.do from:no-reply@apap.com.do '
-      'from:notificaciones@banreservas.com subject:transacciones '
+      '{BHD APAP Banreservas "Banco Popular" Scotiabank ACAP Promerica '
+      '"Banco Caribe" Banesco "La Nacional" Ademi Adopem "Santa Cruz" '
+      'Qik Lafise BDI Citibank Bandex Banfondesa JMMB Alaver ABONAP '
+      'subject:transacciones '
       'subject:notificaciones subject:consumo subject:purchase '
       'subject:transaction subject:approved subject:compra '
       'subject:aprobada subject:autorizada subject:retiro subject:pago '
-      'subject:deposito "card ending" "tarjeta terminada" '
+      'subject:deposito subject:transferencia "card ending" "tarjeta terminada" '
       '"consumo realizado" "transaccion realizada" "tarjeta de debito" '
       '"retiro en cajero" "deposito de sueldo" "payment approved" '
-      '"cash withdrawal"}';
+      '"cash withdrawal" "transferencia recibida" "transferencia enviada"}';
   static final _requests = GmailRequestQueue();
   static bool _syncActive = false;
   final status = ValueNotifier<String>('');
@@ -424,12 +426,19 @@ class GmailPurchaseSyncService {
         );
         final transactions = parseBankTransactions(full);
         for (final transaction in transactions) {
-          var card = _firstCardWithLastFour(knownCards, transaction.lastFour);
+          var card = _firstCardWithLastFour(
+            knownCards,
+            transaction.lastFour,
+            accountType: transaction.accountType,
+            currency: transaction.currency,
+          );
           if (card == null) {
             card = _inferredCard(
               transaction.lastFour,
               accountType: transaction.accountType,
+              currency: transaction.currency,
               bank: transaction.bank,
+              needsReview: transaction.needsReview,
             );
             discoveredByLastFour[transaction.lastFour] = card;
             knownCards.add(card);
@@ -493,13 +502,15 @@ class GmailPurchaseSyncService {
   CreditCard _inferredCard(
     String lastFour, {
     AccountType accountType = AccountType.credit,
+    String currency = 'DOP',
     String? bank,
+    bool needsReview = false,
   }) {
     const accentColors = [0xFF0F766E, 0xFF2563EB, 0xFFB45309, 0xFFDC2626];
     return CreditCard(
-      id: 'card-email-$lastFour',
+      id: 'card-email-${accountType.name}-${currency.toLowerCase()}-$lastFour',
       name:
-          '${bank == null ? '' : '$bank '}${accountType == AccountType.debit ? 'Debit' : 'Credit'} •$lastFour',
+          '${bank == null ? '' : '$bank '}${accountType == AccountType.debit ? 'Debit' : 'Credit'} $currency •$lastFour',
       lastFour: lastFour,
       balance: 0,
       creditLimit: 0,
@@ -510,6 +521,8 @@ class GmailPurchaseSyncService {
       accentColor: accentColors[lastFour.codeUnitAt(0) % accentColors.length],
       emailMatchTerms: [lastFour],
       accountType: accountType,
+      currency: currency,
+      needsReview: needsReview,
     );
   }
 
@@ -642,9 +655,18 @@ class _AccessToken {
   final DateTime expiresAt;
 }
 
-CreditCard? _firstCardWithLastFour(List<CreditCard> cards, String lastFour) {
+CreditCard? _firstCardWithLastFour(
+  List<CreditCard> cards,
+  String lastFour, {
+  AccountType? accountType,
+  String? currency,
+}) {
   for (final card in cards) {
-    if (card.lastFour == lastFour) return card;
+    if (card.lastFour == lastFour &&
+        (accountType == null || card.accountType == accountType) &&
+        (currency == null || card.currency == currency)) {
+      return card;
+    }
   }
   return null;
 }

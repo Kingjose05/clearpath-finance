@@ -130,7 +130,7 @@ class AppStore {
     final cards = _data.cards.map((card) {
       final allocation = plan.allocationForCard(card.id);
       if (allocation == null || allocation.totalAmount <= 0) return card;
-      final paymentAmount = math.min(card.totalOwed, allocation.totalAmount);
+      final paymentAmount = math.min(card.totalOwed, allocation.nativeAmount);
       final revolvingPayment = math.min(card.balance, paymentAmount);
       final installmentPayment = math.min(
         card.installmentBalance,
@@ -167,6 +167,7 @@ double _balanceAfterTransaction(CreditCard account, Purchase transaction) {
   if (account.isDebit) {
     return switch (transaction.kind) {
       TransactionKind.income ||
+      TransactionKind.transferIn ||
       TransactionKind.refund => account.balance + amount,
       TransactionKind.adjustment => amount,
       _ => math.max(0, account.balance - amount),
@@ -174,6 +175,7 @@ double _balanceAfterTransaction(CreditCard account, Purchase transaction) {
   }
   return switch (transaction.kind) {
     TransactionKind.cardPayment ||
+    TransactionKind.transferIn ||
     TransactionKind.refund => math.max(0, account.balance - amount),
     TransactionKind.adjustment => amount,
     TransactionKind.income => account.balance,
@@ -194,9 +196,11 @@ DebtAppData emptyDebtData({AppSettings settings = const AppSettings()}) {
       emailSyncEnabled: false,
       backgroundEmailSyncEnabled: false,
       clearConnectedEmail: true,
+      clearConnectedEmailProvider: true,
       clearLastEmailSyncAt: true,
       clearLastBackgroundEmailSyncAt: true,
       clearLastEmailSyncStatus: true,
+      clearLastCalibrationAt: true,
     ),
     loans: const [],
   );

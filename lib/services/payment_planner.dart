@@ -13,6 +13,8 @@ class PaymentAllocation {
     required this.extraAmount,
     required this.reason,
     required this.isAtRisk,
+    this.currency = 'DOP',
+    this.exchangeRateDopPerUsd = 1,
   });
 
   final String cardId;
@@ -24,8 +26,12 @@ class PaymentAllocation {
   final double extraAmount;
   final String reason;
   final bool isAtRisk;
+  final String currency;
+  final double exchangeRateDopPerUsd;
 
   double get totalAmount => minimumAmount + extraAmount;
+  double get nativeAmount =>
+      currency == 'USD' ? totalAmount / exchangeRateDopPerUsd : totalAmount;
 }
 
 class PaymentPlan {
@@ -59,6 +65,7 @@ class PaymentPlanner {
   PaymentPlan buildPlan({
     required List<CreditCard> cards,
     required double paycheckAmount,
+    double exchangeRateDopPerUsd = 60,
   }) {
     final budget = math.max(0, paycheckAmount).toDouble();
     final now = DateTime.now();
@@ -67,9 +74,13 @@ class PaymentPlanner {
         .toList();
     final minimums = <String, double>{
       for (final card in activeCards)
-        card.id: math.min(
-          card.minimumDue + card.installmentMonthlyPayment,
-          card.totalOwed,
+        card.id: amountInDop(
+          math.min(
+            card.minimumDue + card.installmentMonthlyPayment,
+            card.totalOwed,
+          ),
+          card.currency,
+          exchangeRateDopPerUsd,
         ),
     };
     final requiredMinimums = minimums.values.fold(
@@ -100,7 +111,18 @@ class PaymentPlanner {
       if (remaining <= 0.01) break;
       final alreadyPaid = payments[card.id] ?? 0;
       final extra = math
-          .min(math.max(0, card.balance - alreadyPaid), remaining)
+          .min(
+            math.max(
+              0,
+              amountInDop(
+                    card.totalOwed,
+                    card.currency,
+                    exchangeRateDopPerUsd,
+                  ) -
+                  alreadyPaid,
+            ),
+            remaining,
+          )
           .toDouble();
       payments[card.id] = alreadyPaid + extra;
       remaining -= extra;
@@ -130,6 +152,8 @@ class PaymentPlanner {
           extraAmount: extra,
           reason: reason,
           isAtRisk: atRisk,
+          currency: card.currency,
+          exchangeRateDopPerUsd: exchangeRateDopPerUsd,
         ),
       );
     }

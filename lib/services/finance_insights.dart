@@ -10,6 +10,8 @@ class AnalyticsSnapshot {
     required this.income,
     required this.categoryTotals,
     required this.monthlyTotals,
+    required this.merchantTotals,
+    required this.weekdayTotals,
     required this.topMerchant,
   });
 
@@ -18,6 +20,8 @@ class AnalyticsSnapshot {
   final double income;
   final Map<SpendingCategory, double> categoryTotals;
   final Map<DateTime, double> monthlyTotals;
+  final Map<String, double> merchantTotals;
+  final Map<int, double> weekdayTotals;
   final String? topMerchant;
 }
 
@@ -37,15 +41,20 @@ AnalyticsSnapshot buildAnalytics(
       DateTime(today.year, today.month - index): 0,
   };
   final merchants = <String, double>{};
+  final weekdays = <int, double>{for (var day = 1; day <= 7; day++) day: 0};
   var spending = 0.0;
   var withdrawals = 0.0;
   var income = 0.0;
   for (final item in inRange) {
     if (item.kind == TransactionKind.income ||
+        item.kind == TransactionKind.transferIn ||
         item.kind == TransactionKind.refund ||
         item.kind == TransactionKind.cardPayment ||
         item.kind == TransactionKind.adjustment) {
-      if (item.kind == TransactionKind.income) income += item.amount;
+      if (item.kind == TransactionKind.income ||
+          item.kind == TransactionKind.transferIn) {
+        income += item.amount;
+      }
       continue;
     }
     spending += item.amount;
@@ -61,6 +70,8 @@ AnalyticsSnapshot buildAnalytics(
       monthTotals[month] = monthTotals[month]! + item.amount;
     }
     merchants[item.merchant] = (merchants[item.merchant] ?? 0) + item.amount;
+    weekdays[item.purchasedAt.weekday] =
+        (weekdays[item.purchasedAt.weekday] ?? 0) + item.amount;
   }
   final sortedCategories = categories.entries.toList()
     ..sort((a, b) => b.value.compareTo(a.value));
@@ -72,6 +83,8 @@ AnalyticsSnapshot buildAnalytics(
     income: income,
     categoryTotals: Map.fromEntries(sortedCategories),
     monthlyTotals: monthTotals,
+    merchantTotals: Map.fromEntries(sortedMerchants),
+    weekdayTotals: weekdays,
     topMerchant: sortedMerchants.isEmpty ? null : sortedMerchants.first.key,
   );
 }
@@ -140,6 +153,7 @@ DebtStrategy buildDebtStrategy({
   required double monthlySalary,
   required double essentialExpenses,
   required int targetMonths,
+  double exchangeRateDopPerUsd = 60,
 }) {
   final items = <DebtStrategyItem>[
     for (final card in cards.where(
@@ -148,11 +162,19 @@ DebtStrategy buildDebtStrategy({
       DebtStrategyItem(
         id: card.id,
         name: card.name,
-        balance: card.totalOwed,
-        apr: card.apr,
-        minimum: math.min(
+        balance: amountInDop(
           card.totalOwed,
-          card.minimumDue + card.installmentMonthlyPayment,
+          card.currency,
+          exchangeRateDopPerUsd,
+        ),
+        apr: card.apr,
+        minimum: amountInDop(
+          math.min(
+            card.totalOwed,
+            card.minimumDue + card.installmentMonthlyPayment,
+          ),
+          card.currency,
+          exchangeRateDopPerUsd,
         ),
         dueDay: card.dueDay,
         isLoan: false,

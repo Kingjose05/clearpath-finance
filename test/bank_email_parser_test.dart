@@ -157,4 +157,26 @@ void main() {
     expect(result.single.accountType, AccountType.debit);
     expect(result.single.amount, 850);
   });
+
+  test(
+    'recognizes Banco Popular incoming transfers as debit-account money in',
+    () {
+      final result = parseBankTransactions(
+        bankMessage(
+          from: 'Banco Popular <alertas@bpd.com.do>',
+          subject: 'Transferencia recibida',
+          body: '''
+        Crédito a su cuenta de ahorro terminada en 4412
+        Monto: RD\$ 12,500.00
+        Fecha: 11/09/2026
+        Concepto: Transferencia recibida de Juan
+      ''',
+        ),
+      );
+      expect(result, hasLength(1));
+      expect(result.single.bank, 'Banco Popular');
+      expect(result.single.accountType, AccountType.debit);
+      expect(result.single.kind, TransactionKind.transferIn);
+    },
+  );
 }

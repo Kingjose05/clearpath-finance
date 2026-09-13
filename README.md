@@ -6,13 +6,15 @@ debt payoff plans.
 
 ## Features
 
-- Google OAuth Gmail import for BHD, APAP, and Banreservas notifications
-- Credit and debit account detection from the last four digits
-- Purchases, cash withdrawals, payments, refunds, salary, and adjustments
+- Provider picker for Gmail, Outlook/Microsoft 365, and iCloud Mail
+- Live read-only Gmail import with setup guidance for Outlook and iCloud
+- Dominican-bank alert recognition with a generic structured-alert fallback
+- Credit and debit account detection from the last four digits in DOP or USD
+- Purchases, cash withdrawals, payments, refunds, salary, and incoming/outgoing transfers
 - Manual balance calibration, cutoff dates, due dates, APRs, and installments
 - Loans with due dates, APRs, minimums, and reminders
-- Spending analytics by category and month
-- Explainable debt-avalanche payoff timeline with a month slider
+- Spending analytics by category, month, merchant, and weekday
+- Salary-percentage or fixed-budget debt payoff calendar with ICS reminder export
 - Local-only financial storage; each browser profile owns its own data
 
 ## Run locally
@@ -34,3 +36,7 @@ flutter build ios --release --no-codesign
 Gmail access uses the OAuth client ID declared in `web/index.html`. Production
 access for accounts outside the Google OAuth test-user list requires publishing
 and verifying the Google consent screen.
+
+Outlook requires a Microsoft Entra application with delegated `Mail.Read`.
+iCloud Mail cannot be read by a static browser app; it needs Apple-authorized
+account access or a secure server/native IMAP bridge.

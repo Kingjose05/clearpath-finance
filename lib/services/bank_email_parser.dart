@@ -15,6 +15,7 @@ class BankTransaction {
     required this.merchant,
     required this.date,
     this.accountType = AccountType.credit,
+    this.needsReview = false,
     this.kind = TransactionKind.purchase,
     this.category = SpendingCategory.other,
   });
@@ -25,8 +26,65 @@ class BankTransaction {
   final String merchant;
   final DateTime date;
   final AccountType accountType;
+  final bool needsReview;
   final TransactionKind kind;
   final SpendingCategory category;
+}
+
+const _dominicanBankBrands = <String, String>{
+  'banreservas': 'Banreservas',
+  'bancopopular': 'Banco Popular',
+  'popularenlinea': 'Banco Popular',
+  'bpd.com.do': 'Banco Popular',
+  'bhd': 'BHD',
+  'scotiabank': 'Scotiabank',
+  'apap': 'APAP',
+  'asociacion popular': 'APAP',
+  'acap': 'Asociación Cibao',
+  'asociacion cibao': 'Asociación Cibao',
+  'promerica': 'Banco Promerica',
+  'bancocaribe': 'Banco Caribe',
+  'banesco': 'Banesco',
+  'asociacion la nacional': 'Asociación La Nacional',
+  'bancoademi': 'Banco Ademi',
+  'adopem': 'Banco Adopem',
+  'bancosantacruz': 'Banco Santa Cruz',
+  'banco santa cruz': 'Banco Santa Cruz',
+  'qik': 'Qik Banco Digital',
+  'lafise': 'Banco Lafise',
+  'bancobdi': 'Banco BDI',
+  'banco bdi': 'Banco BDI',
+  'citibank': 'Citibank',
+  'banco agricola': 'Banco Agrícola',
+  'bagricola': 'Banco Agrícola',
+  'bandex': 'Bandex',
+  'banfondesa': 'Banfondesa',
+  'motorcredito': 'Motor Crédito',
+  'alaver': 'Alaver',
+  'abonap': 'ABONAP',
+  'jmmb': 'JMMB Bank',
+  'bancofihogar': 'Banco Fihogar',
+  'bancoconfisa': 'Banco Confisa',
+  'bancoatlantico': 'Banco Atlántico',
+  'bancovimenca': 'Banco Vimenca',
+  'bancounion': 'Banco Unión',
+  'asomoca': 'Asociación Mocana',
+  'asociacion mocana': 'Asociación Mocana',
+  'asociacion duarte': 'Asociación Duarte',
+  'asociacion romana': 'Asociación Romana',
+  'asociacion peravia': 'Asociación Peravia',
+  'asociacion maguana': 'Asociación Maguana',
+};
+
+String _bankName(String sender, String content) {
+  final haystack = _normalize('$sender $content');
+  for (final entry in _dominicanBankBrands.entries) {
+    if (haystack.contains(entry.key)) return entry.value;
+  }
+  if (!sender.contains('@')) return '';
+  final domain = sender.split('@').last.split('.').first;
+  if (domain.length < 2) return '';
+  return '${domain[0].toUpperCase()}${domain.substring(1)}';
 }
 
 SpendingCategory categorizeMerchant(String value) {
@@ -218,25 +276,7 @@ DateTime _date(String value, String time, DateTime fallback) {
 List<BankTransaction> parseBankTransactions(gmail.Message message) {
   final from = messageHeader(message, 'from').toLowerCase();
   final sender = RegExp(r'<([^>]+)>').firstMatch(from)?.group(1) ?? from.trim();
-  var bank = switch (sender) {
-    'alertas@bhd.com.do' => 'BHD',
-    'no-reply@apap.com.do' => 'APAP',
-    'notificaciones@banreservas.com' => 'Banreservas',
-    _ => '',
-  };
-  if (bank.isEmpty && sender.contains('@')) {
-    final domain = sender.split('@').last.split('.').first;
-    if (domain.length >= 2) {
-      bank = '${domain[0].toUpperCase()}${domain.substring(1)}';
-    }
-  }
-  if (bank.isEmpty) return [];
   final subject = _normalize(messageHeader(message, 'subject'));
-  if (!RegExp(
-    r'notificacion|notification|transaccion|transaction|consumo|purchase|retiro|withdrawal|pago|payment|deposito|deposit',
-  ).hasMatch(subject)) {
-    return [];
-  }
 
   final htmlParts = _parts(message.payload, 'text/html');
   final doc = html.parse(htmlParts.join('\n'));
@@ -248,15 +288,16 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
       .map(_clean)
       .where((line) => line.isNotEmpty)
       .join('\n');
+  final normalizedText = _normalize(text);
+  if (!RegExp(
+    r'notificacion|notification|transaccion|transaction|consumo|purchase|retiro|withdrawal|pago|payment|deposito|deposit|transferencia|transfer|abono|credito|debito',
+  ).hasMatch('$subject $normalizedText')) {
+    return [];
+  }
+  final bank = _bankName(sender, '$subject $normalizedText');
+  if (bank.isEmpty) return [];
   final lastFour = _cardNumber(text.replaceAll('\n', ' '));
   if (lastFour == null) return [];
-  final normalizedText = _normalize(text);
-  final accountType =
-      RegExp(
-        r'tarjeta (?:de )?debito|debit card|cuenta de ahorro|cuenta corriente|checking account|savings account',
-      ).hasMatch(normalizedText)
-      ? AccountType.debit
-      : AccountType.credit;
 
   final records = <Map<String, String>>[];
   final fields = <String, String>{};
@@ -273,6 +314,13 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     'descripcion',
     'concepto',
     'valor',
+    'importe',
+    'debito',
+    'credito',
+    'detalle',
+    'beneficiario',
+    'origen',
+    'destino',
     'date',
     'time',
     'currency',
@@ -325,30 +373,48 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
           ).hasMatch(context)
         ? TransactionKind.cardPayment
         : RegExp(
-            r'nomina|salario|deposito de sueldo|pago de sueldo',
+            r'nomina|salario|deposito de sueldo|pago de sueldo|credito de nomina',
           ).hasMatch(context)
         ? TransactionKind.income
+        : RegExp(
+            r'transferencia recibida|transferencia entrante|abono recibido|credito (?:a|en) (?:su )?cuenta|incoming transfer|ach credit',
+          ).hasMatch(context)
+        ? TransactionKind.transferIn
+        : RegExp(
+            r'transferencia enviada|transferencia saliente|debito (?:a|en) (?:su )?cuenta|outgoing transfer|ach debit',
+          ).hasMatch(context)
+        ? TransactionKind.transferOut
         : RegExp(r'reembolso|devolucion|refund').hasMatch(context)
         ? TransactionKind.refund
         : TransactionKind.purchase;
+    final explicitDebit = RegExp(
+      r'tarjeta (?:de )?debito|debit card|cuenta de ahorro|cuenta corriente|checking account|savings account',
+    ).hasMatch(context);
+    final explicitCredit = RegExp(
+      r'tarjeta (?:de )?credito|credit card|balance al corte|pago minimo',
+    ).hasMatch(context);
+    final accountType =
+        explicitDebit ||
+            kind == TransactionKind.income ||
+            kind == TransactionKind.transferIn ||
+            kind == TransactionKind.transferOut
+        ? AccountType.debit
+        : AccountType.credit;
+    var needsReview = !explicitDebit && !explicitCredit;
     final state = _normalize(
       _firstField(record, text, const ['estado', 'status']),
     );
-    final stateRequired =
-        kind == TransactionKind.purchase || kind == TransactionKind.withdrawal;
-    if (stateRequired &&
-        !{
-          'aprobada',
-          'aprobado',
-          'approved',
-          'autorizada',
-          'authorized',
-        }.contains(state)) {
+    if (RegExp(
+      r'rechazad|declined|cancelad|reversad|fallid|failed|pendiente|pending',
+    ).hasMatch(state)) {
       continue;
     }
     final amountText = _firstField(record, text, const [
       'monto',
       'valor',
+      'importe',
+      'debito',
+      'credito',
       'amount',
     ]);
     final amount = parseBankAmount(amountText);
@@ -357,6 +423,8 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     if (merchant.isEmpty) merchant = _field(record, text, 'cajero');
     if (merchant.isEmpty) merchant = _field(record, text, 'descripcion');
     if (merchant.isEmpty) merchant = _field(record, text, 'concepto');
+    if (merchant.isEmpty) merchant = _field(record, text, 'detalle');
+    if (merchant.isEmpty) merchant = _field(record, text, 'beneficiario');
     if (merchant.isEmpty && kind == TransactionKind.withdrawal) {
       merchant = 'Cash withdrawal';
     }
@@ -366,6 +434,12 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     if (merchant.isEmpty && kind == TransactionKind.income) {
       merchant = 'Salary deposit';
     }
+    if (merchant.isEmpty && kind == TransactionKind.transferIn) {
+      merchant = 'Incoming transfer';
+    }
+    if (merchant.isEmpty && kind == TransactionKind.transferOut) {
+      merchant = 'Outgoing transfer';
+    }
     if (merchant.isEmpty) continue;
     final money = _normalize(
       '${_firstField(record, text, const ['moneda', 'currency'])} $amountText',
@@ -374,8 +448,10 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
         ? 'USD'
         : RegExp(r'\b(?:rd|dop|pesos)').hasMatch(money)
         ? 'DOP'
-        : '';
-    if (currency.isEmpty) continue;
+        : 'DOP';
+    if (!RegExp(r'\b(?:usd|us|dolar|rd|dop|pesos)').hasMatch(money)) {
+      needsReview = true;
+    }
     result.add(
       BankTransaction(
         lastFour: lastFour,
@@ -393,11 +469,15 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
           fallback,
         ),
         accountType: accountType,
+        needsReview: needsReview,
         kind: kind,
         category: kind == TransactionKind.withdrawal
             ? SpendingCategory.cash
             : kind == TransactionKind.income
             ? SpendingCategory.income
+            : kind == TransactionKind.transferIn ||
+                  kind == TransactionKind.transferOut
+            ? SpendingCategory.transfers
             : kind == TransactionKind.cardPayment
             ? SpendingCategory.payments
             : categorizeMerchant(merchant),

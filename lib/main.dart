@@ -1,10 +1,12 @@
 import 'dart:math' as math;
+import 'dart:convert';
 
 import 'package:background_fetch/background_fetch.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'models.dart';
 import 'services/app_store.dart';
@@ -13,6 +15,7 @@ import 'services/email_sync_service.dart';
 import 'services/finance_insights.dart';
 import 'services/notification_service.dart';
 import 'services/payment_planner.dart';
+import 'services/payoff_calendar.dart';
 
 const _ink = Color(0xFF16232C);
 const _muted = Color(0xFF667784);
@@ -175,6 +178,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   PaymentPlan get plan => widget.planner.buildPlan(
     cards: data.cards,
     paycheckAmount: data.latestPaycheck?.amount ?? data.totalMinimumDue,
+    exchangeRateDopPerUsd: data.settings.exchangeRateDopPerUsd,
   );
 
   @override
@@ -190,6 +194,18 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
 
   void _syncStatusChanged() {
     if (mounted) setState(() {});
+  }
+
+  DateTime _incrementalSyncStart() {
+    final lastSync = data.settings.lastEmailSyncAt;
+    final calibrated = data.settings.lastCalibrationAt;
+    DateTime? latest;
+    if (lastSync != null) latest = lastSync;
+    if (calibrated != null && (latest == null || calibrated.isAfter(latest))) {
+      latest = calibrated;
+    }
+    return (latest ?? DateTime.now().subtract(const Duration(days: 30)))
+        .subtract(const Duration(days: 3));
   }
 
   @override
@@ -263,6 +279,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         onAddPaycheck: _showPaycheckSheet,
         onApplyPlan: _applyCurrentPlan,
         onAddPurchase: () => _showPurchaseSheet(),
+        onSyncEmail: _syncGmail,
+        onCalibrate: _showCalibrationSheet,
+        syncing: _syncing,
       ),
       CardsView(
         data: data,
@@ -275,7 +294,8 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       InsightsView(
         data: data,
         onEditProfile: _showFinancialProfileSheet,
-        onTargetMonthsChanged: _setTargetMonths,
+        onEditBudget: _showPaymentBudgetSheet,
+        onExportCalendar: _exportPaymentCalendar,
       ),
       SettingsView(
         data: data,
@@ -284,9 +304,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         onNotificationsChanged: _setNotificationsEnabled,
         onTestNotification: _testNotification,
         onBackgroundEmailSyncChanged: _setBackgroundEmailSyncEnabled,
-        onConfigureGmail: _configureGmailOAuth,
-        onGmailSync: _syncGmail,
-        onImportGmail: _importGmail,
+        onConnectEmail: _showEmailProviderSheet,
+        onEmailSync: _syncGmail,
+        onImportEmail: _importGmail,
         onRunBackgroundSyncNow: _runBackgroundSyncNow,
         onDisconnectEmail: _disconnectEmail,
         onResetData: _resetData,
@@ -543,6 +563,223 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     _snack('Transaction added to ${selectedCard.name}.');
   }
 
+  Future<void> _showCalibrationSheet() async {
+    if (data.cards.isEmpty) {
+      _snack('Import or add an account before calibration.');
+      return;
+    }
+    final balances = {
+      for (final account in data.cards)
+        account.id: TextEditingController(
+          text: account.balance.toStringAsFixed(2),
+        ),
+    };
+    final minimums = {
+      for (final account in data.cards)
+        account.id: TextEditingController(
+          text: account.minimumDue.toStringAsFixed(2),
+        ),
+    };
+    final installments = {
+      for (final account in data.cards)
+        account.id: TextEditingController(
+          text: account.installmentBalance.toStringAsFixed(2),
+        ),
+    };
+    final installmentPayments = {
+      for (final account in data.cards)
+        account.id: TextEditingController(
+          text: account.installmentMonthlyPayment.toStringAsFixed(2),
+        ),
+    };
+    final cutoffs = {
+      for (final account in data.cards)
+        account.id: TextEditingController(text: '${account.cutoffDay}'),
+    };
+    final dues = {
+      for (final account in data.cards)
+        account.id: TextEditingController(text: '${account.dueDay}'),
+    };
+    final types = {
+      for (final account in data.cards) account.id: account.accountType,
+    };
+    final currencies = {
+      for (final account in data.cards) account.id: account.currency,
+    };
+    final exchangeRate = TextEditingController(
+      text: data.settings.exchangeRateDopPerUsd.toStringAsFixed(2),
+    );
+
+    final submitted = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocalState) => _SheetFrame(
+          title: 'Calibrate accounts',
+          children: [
+            const Text(
+              'Use the balances in your banking apps or latest statements. New email activity will be counted from this calibration forward.',
+              style: TextStyle(color: _muted),
+            ),
+            const SizedBox(height: 14),
+            _MoneyField(
+              controller: exchangeRate,
+              label: 'DOP per USD exchange rate',
+            ),
+            const SizedBox(height: 18),
+            for (final account in data.cards) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      account.name,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  if (account.needsReview)
+                    const _StatusChip(label: 'Review', color: _gold),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SegmentedButton<AccountType>(
+                segments: const [
+                  ButtonSegment(
+                    value: AccountType.credit,
+                    label: Text('Credit'),
+                    icon: Icon(Icons.credit_card),
+                  ),
+                  ButtonSegment(
+                    value: AccountType.debit,
+                    label: Text('Debit'),
+                    icon: Icon(Icons.account_balance_wallet_outlined),
+                  ),
+                ],
+                selected: {types[account.id]!},
+                onSelectionChanged: (value) =>
+                    setLocalState(() => types[account.id] = value.first),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: currencies[account.id],
+                decoration: const InputDecoration(labelText: 'Currency'),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'DOP',
+                    child: Text('DOP · Dominican pesos'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'USD',
+                    child: Text('USD · US dollars'),
+                  ),
+                ],
+                onChanged: (value) => setLocalState(
+                  () => currencies[account.id] = value ?? 'DOP',
+                ),
+              ),
+              const SizedBox(height: 10),
+              _MoneyField(
+                controller: balances[account.id]!,
+                label: types[account.id] == AccountType.debit
+                    ? 'Current available balance'
+                    : 'Current revolving debt',
+              ),
+              if (types[account.id] == AccountType.credit) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _MoneyField(
+                        controller: installments[account.id]!,
+                        label: 'Cuotas owed',
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _MoneyField(
+                        controller: installmentPayments[account.id]!,
+                        label: 'Monthly cuota',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _MoneyField(
+                  controller: minimums[account.id]!,
+                  label: 'Minimum payment',
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _NumberField(
+                        controller: cutoffs[account.id]!,
+                        label: 'Cutoff day',
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _NumberField(
+                        controller: dues[account.id]!,
+                        label: 'Payment day',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Divider(height: 1),
+              ),
+            ],
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.tune),
+              label: const Text('Save calibration'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (submitted != true) return;
+    for (final account in [...data.cards]) {
+      final type = types[account.id]!;
+      await widget.store.upsertCard(
+        account.copyWith(
+          accountType: type,
+          currency: currencies[account.id],
+          balance: _parseMoney(balances[account.id]!.text),
+          minimumDue: type == AccountType.credit
+              ? _parseMoney(minimums[account.id]!.text)
+              : 0,
+          installmentBalance: type == AccountType.credit
+              ? _parseMoney(installments[account.id]!.text)
+              : 0,
+          installmentMonthlyPayment: type == AccountType.credit
+              ? _parseMoney(installmentPayments[account.id]!.text)
+              : 0,
+          cutoffDay: _parseDay(cutoffs[account.id]!.text),
+          dueDay: _parseDay(dues[account.id]!.text),
+          needsReview: false,
+        ),
+      );
+    }
+    await widget.store.updateSettings(
+      widget.store.data.settings.copyWith(
+        lastCalibrationAt: DateTime.now(),
+        exchangeRateDopPerUsd: math.max(1, _parseMoney(exchangeRate.text)),
+      ),
+    );
+    await _saveAndRefresh();
+    if (mounted) _snack('Accounts calibrated. Future updates start here.');
+  }
+
   Future<void> _showCardSheet([CreditCard? card]) async {
     final isNew = card == null;
     final name = TextEditingController(text: card?.name ?? '');
@@ -573,6 +810,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     );
     var accent = card?.accentColor ?? _teal.toARGB32();
     var accountType = card?.accountType ?? AccountType.credit;
+    var currency = card?.currency ?? 'DOP';
     final installmentBalance = TextEditingController(
       text: (card?.installmentBalance ?? 0).toStringAsFixed(2),
     );
@@ -615,6 +853,23 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                   selected: {accountType},
                   onSelectionChanged: (value) =>
                       setLocalState(() => accountType = value.first),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: currency,
+                  decoration: const InputDecoration(labelText: 'Currency'),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'DOP',
+                      child: Text('DOP · Dominican pesos'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'USD',
+                      child: Text('USD · US dollars'),
+                    ),
+                  ],
+                  onChanged: (value) =>
+                      setLocalState(() => currency = value ?? 'DOP'),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -760,12 +1015,14 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
             .where((term) => term.isNotEmpty)
             .toList(),
         accountType: accountType,
+        currency: currency,
         installmentBalance: accountType == AccountType.credit
             ? _parseMoney(installmentBalance.text)
             : 0,
         installmentMonthlyPayment: accountType == AccountType.credit
             ? _parseMoney(installmentPayment.text)
             : 0,
+        needsReview: false,
       ),
     );
     await _saveAndRefresh();
@@ -902,11 +1159,115 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _setTargetMonths(int months) async {
-    await widget.store.updateSettings(
-      data.settings.copyWith(targetPayoffMonths: months),
+  Future<void> _showPaymentBudgetSheet() async {
+    var mode = data.settings.paymentBudgetMode;
+    final amount = TextEditingController(
+      text: data.settings.monthlyDebtBudget.toStringAsFixed(2),
     );
-    if (mounted) setState(() {});
+    var percent = data.settings.salaryDebtPercent.clamp(5, 100).toDouble();
+    final submitted = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocalState) => _SheetFrame(
+          title: 'Payment commitment',
+          children: [
+            SegmentedButton<PaymentBudgetMode>(
+              segments: const [
+                ButtonSegment(
+                  value: PaymentBudgetMode.amount,
+                  icon: Icon(Icons.payments_outlined),
+                  label: Text('Amount'),
+                ),
+                ButtonSegment(
+                  value: PaymentBudgetMode.percent,
+                  icon: Icon(Icons.percent),
+                  label: Text('Salary %'),
+                ),
+              ],
+              selected: {mode},
+              onSelectionChanged: (value) =>
+                  setLocalState(() => mode = value.first),
+            ),
+            const SizedBox(height: 18),
+            if (mode == PaymentBudgetMode.amount)
+              _MoneyField(controller: amount, label: 'DOP committed per month')
+            else ...[
+              Text(
+                '${percent.toStringAsFixed(0)}% of salary · ${_money.format(data.settings.monthlySalary * percent / 100)} monthly',
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              Slider(
+                min: 5,
+                max: 100,
+                divisions: 19,
+                value: percent,
+                label: '${percent.toStringAsFixed(0)}%',
+                onChanged: (value) => setLocalState(() => percent = value),
+              ),
+            ],
+            const SizedBox(height: 12),
+            const Text(
+              'ClearPath protects required payments first, then applies every extra peso to the highest APR.',
+              style: TextStyle(color: _muted),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.auto_graph),
+              label: const Text('Build payment calendar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (submitted != true) return;
+    await widget.store.updateSettings(
+      data.settings.copyWith(
+        paymentBudgetMode: mode,
+        monthlyDebtBudget: _parseMoney(amount.text),
+        salaryDebtPercent: percent,
+      ),
+    );
+    await _saveAndRefresh();
+  }
+
+  Future<void> _exportPaymentCalendar() async {
+    final budget = data.settings.plannedMonthlyDebtPayment > 0
+        ? data.settings.plannedMonthlyDebtPayment
+        : data.totalMinimumDue;
+    final schedule = buildPayoffSchedule(
+      cards: data.cards,
+      loans: data.loans,
+      monthlyBudgetDop: budget,
+      exchangeRateDopPerUsd: data.settings.exchangeRateDopPerUsd,
+    );
+    if (schedule.months.isEmpty) {
+      _snack('Add debt and a payment commitment before exporting.');
+      return;
+    }
+    final bytes = Uint8List.fromList(
+      utf8.encode(buildPayoffCalendarIcs(schedule)),
+    );
+    await SharePlus.instance.share(
+      ShareParams(
+        title: 'ClearPath payment calendar',
+        subject: 'ClearPath payment calendar',
+        text: 'Payment reminders generated by ClearPath Finance.',
+        files: [
+          XFile.fromData(
+            bytes,
+            mimeType: 'text/calendar',
+            name: 'clearpath-payment-plan.ics',
+          ),
+        ],
+        downloadFallbackEnabled: true,
+      ),
+    );
   }
 
   Future<void> _setNotificationsEnabled(bool enabled) async {
@@ -936,7 +1297,85 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     }
     await _saveAndRefresh();
     if (!mounted) return;
-    _snack(enabled ? 'Daily Gmail sync enabled.' : 'Daily Gmail sync paused.');
+    _snack(enabled ? 'Daily email sync enabled.' : 'Daily email sync paused.');
+  }
+
+  Future<void> _showEmailProviderSheet() async {
+    final provider = await showModalBottomSheet<EmailProvider>(
+      context: context,
+      backgroundColor: _surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+      ),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Connect email',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'ClearPath only requests read access needed to find bank alerts.',
+                style: TextStyle(color: _muted),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.mail_outline, color: _coral),
+                title: const Text('Gmail'),
+                subtitle: const Text('Connect securely with Google'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.pop(context, EmailProvider.gmail),
+              ),
+              ListTile(
+                leading: const Icon(
+                  Icons.alternate_email,
+                  color: Color(0xFF1264A3),
+                ),
+                title: const Text('Outlook / Microsoft 365'),
+                subtitle: const Text('Microsoft Graph connection'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.pop(context, EmailProvider.outlook),
+              ),
+              ListTile(
+                leading: const Icon(Icons.cloud_outlined, color: _muted),
+                title: const Text('iCloud Mail'),
+                subtitle: const Text('Apple-authorized mail connection'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.pop(context, EmailProvider.icloud),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (provider == null || !mounted) return;
+    if (provider == EmailProvider.gmail) {
+      await _configureGmailOAuth();
+      return;
+    }
+    final providerName = _emailProviderLabel(provider);
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('$providerName connection'),
+        content: Text(
+          provider == EmailProvider.outlook
+              ? 'The Outlook reader is ready for Microsoft Graph, but the public app still needs its own Microsoft application ID before sign-in can be enabled. ClearPath will never ask for your Microsoft password.'
+              : 'Apple does not allow a static browser app to connect directly to iCloud Mail over IMAP. A secure ClearPath mail bridge or the installed iPhone app is required. ClearPath will never ask for your main Apple Account password.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _configureGmailOAuth() async {
@@ -954,6 +1393,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       await widget.store.updateSettings(
         widget.store.data.settings.copyWith(
           emailSyncEnabled: true,
+          connectedEmailProvider: EmailProvider.gmail,
           backgroundEmailSyncEnabled: !kIsWeb,
           connectedEmail: result.accountEmail,
           lastEmailSyncStatus: imported == 0
@@ -965,6 +1405,11 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       await _saveAndRefresh();
       if (!mounted) return;
       _snack(result.message);
+      if (result.discoveredCards.isNotEmpty ||
+          data.cards.any((account) => account.needsReview)) {
+        setState(() => _syncing = false);
+        await _showCalibrationSheet();
+      }
     } catch (error) {
       if (!mounted) return;
       _snack('Gmail connection failed: $error');
@@ -987,9 +1432,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         data.cards,
         discoverCards: true,
         onBatch: _saveEmailBatch,
-        since:
-            data.settings.lastEmailSyncAt?.subtract(const Duration(days: 3)) ??
-            DateTime.now().subtract(const Duration(days: 30)),
+        since: _incrementalSyncStart(),
         excludedMessageIds: data.purchases
             .map((purchase) => purchase.sourceMessageId)
             .whereType<String>()
@@ -1090,8 +1533,13 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       await _saveAndRefresh();
       if (!mounted) return;
       _snack(result.message);
+      if (result.discoveredCards.isNotEmpty ||
+          data.cards.any((account) => account.needsReview)) {
+        setState(() => _syncing = false);
+        await _showCalibrationSheet();
+      }
     } catch (error) {
-      if (mounted) _snack('Gmail import failed: $error');
+      if (mounted) _snack('Email import failed: $error');
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
@@ -1108,6 +1556,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         emailSyncEnabled: false,
         backgroundEmailSyncEnabled: false,
         clearConnectedEmail: true,
+        clearConnectedEmailProvider: true,
         clearLastEmailSyncAt: true,
         clearLastBackgroundEmailSyncAt: true,
         clearLastEmailSyncStatus: true,
@@ -1142,6 +1591,9 @@ class DashboardView extends StatelessWidget {
     required this.onAddPaycheck,
     required this.onApplyPlan,
     required this.onAddPurchase,
+    required this.onSyncEmail,
+    required this.onCalibrate,
+    required this.syncing,
   });
 
   final DebtAppData data;
@@ -1149,6 +1601,9 @@ class DashboardView extends StatelessWidget {
   final VoidCallback onAddPaycheck;
   final VoidCallback onApplyPlan;
   final VoidCallback onAddPurchase;
+  final VoidCallback onSyncEmail;
+  final VoidCallback onCalibrate;
+  final bool syncing;
 
   @override
   Widget build(BuildContext context) {
@@ -1166,7 +1621,19 @@ class DashboardView extends StatelessWidget {
           plan: plan,
           onAddPaycheck: onAddPaycheck,
           onApplyPlan: onApplyPlan,
+          onSyncEmail: onSyncEmail,
+          syncing: syncing,
         ),
+        if (data.cards.isNotEmpty &&
+            (data.settings.lastCalibrationAt == null ||
+                data.cards.any((account) => account.needsReview))) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: onCalibrate,
+            icon: const Icon(Icons.tune),
+            label: const Text('Calibrate balances and dates'),
+          ),
+        ],
         const SizedBox(height: 18),
         _SectionHeader(
           title: 'Pay today',
@@ -1212,12 +1679,16 @@ class _DashboardHero extends StatelessWidget {
     required this.plan,
     required this.onAddPaycheck,
     required this.onApplyPlan,
+    required this.onSyncEmail,
+    required this.syncing,
   });
 
   final DebtAppData data;
   final PaymentPlan plan;
   final VoidCallback onAddPaycheck;
   final VoidCallback onApplyPlan;
+  final VoidCallback onSyncEmail;
+  final bool syncing;
 
   @override
   Widget build(BuildContext context) {
@@ -1247,6 +1718,24 @@ class _DashboardHero extends StatelessWidget {
                 label: data.settings.emailSyncEnabled ? 'Sync active' : 'Local',
                 color: data.settings.emailSyncEnabled ? _green : _gold,
                 dark: true,
+              ),
+              const SizedBox(width: 6),
+              IconButton(
+                tooltip: 'Update from email',
+                onPressed: data.settings.emailSyncEnabled && !syncing
+                    ? onSyncEmail
+                    : null,
+                color: Colors.white,
+                icon: syncing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.sync),
               ),
             ],
           ),
@@ -1576,7 +2065,10 @@ class _CardSummaryRow extends StatelessWidget {
                 ),
               ),
               Text(
-                _money.format(card.isCredit ? card.totalOwed : card.balance),
+                _currencyMoney(
+                  card.isCredit ? card.totalOwed : card.balance,
+                  card.currency,
+                ),
                 style: const TextStyle(fontWeight: FontWeight.w900),
               ),
             ],
@@ -1732,7 +2224,7 @@ class CardsView extends StatelessWidget {
             icon: Icons.add_card_outlined,
             title: 'Start with your real accounts',
             message:
-                'Add credit and debit cards, or import them securely from Gmail.',
+                'Add credit and debit cards, or import them securely from email.',
           ),
         for (final card in data.cards) ...[
           _CardDetailPanel(card: card, onTap: () => onEditCard(card)),
@@ -1827,12 +2319,12 @@ class _CardDetailPanel extends StatelessWidget {
                 children: [
                   _MiniMetric(
                     label: card.isCredit ? 'Revolving' : 'Available',
-                    value: _money.format(card.balance),
+                    value: _currencyMoney(card.balance, card.currency),
                   ),
                   _MiniMetric(
                     label: card.isCredit ? 'Installments' : 'Type',
                     value: card.isCredit
-                        ? _money.format(card.installmentBalance)
+                        ? _currencyMoney(card.installmentBalance, card.currency)
                         : 'Debit',
                   ),
                   _MiniMetric(
@@ -2098,7 +2590,7 @@ class _PurchaseRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                '${purchase.kind == TransactionKind.income || purchase.kind == TransactionKind.refund ? '+' : '-'}${_money.format(purchase.amount)}',
+                '${purchase.kind == TransactionKind.income || purchase.kind == TransactionKind.transferIn || purchase.kind == TransactionKind.refund || purchase.kind == TransactionKind.cardPayment ? '+' : '-'}${_currencyMoney(purchase.amount, purchase.currency)}',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
                   color:
@@ -2172,24 +2664,28 @@ class InsightsView extends StatelessWidget {
     super.key,
     required this.data,
     required this.onEditProfile,
-    required this.onTargetMonthsChanged,
+    required this.onEditBudget,
+    required this.onExportCalendar,
   });
 
   final DebtAppData data;
   final VoidCallback onEditProfile;
-  final ValueChanged<int> onTargetMonthsChanged;
+  final VoidCallback onEditBudget;
+  final VoidCallback onExportCalendar;
 
   @override
   Widget build(BuildContext context) {
     final analytics = buildAnalytics(data.purchases);
-    final strategy = buildDebtStrategy(
+    final hasSalary = data.settings.monthlySalary > 0;
+    final committed = data.settings.plannedMonthlyDebtPayment > 0
+        ? data.settings.plannedMonthlyDebtPayment
+        : data.totalMinimumDue;
+    final schedule = buildPayoffSchedule(
       cards: data.cards,
       loans: data.loans,
-      monthlySalary: data.settings.monthlySalary,
-      essentialExpenses: data.settings.monthlyEssentialExpenses,
-      targetMonths: data.settings.targetPayoffMonths,
+      monthlyBudgetDop: committed,
+      exchangeRateDopPerUsd: data.settings.exchangeRateDopPerUsd,
     );
-    final hasSalary = data.settings.monthlySalary > 0;
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
       children: [
@@ -2207,6 +2703,14 @@ class InsightsView extends StatelessWidget {
         const _SectionHeader(title: 'Monthly spending'),
         const SizedBox(height: 8),
         _MonthlyChart(values: analytics.monthlyTotals),
+        const SizedBox(height: 18),
+        const _SectionHeader(title: 'Top places'),
+        const SizedBox(height: 8),
+        _SimpleRankedChart(values: analytics.merchantTotals),
+        const SizedBox(height: 18),
+        const _SectionHeader(title: 'Spending by day'),
+        const SizedBox(height: 8),
+        _WeekdayChart(values: analytics.weekdayTotals),
         const SizedBox(height: 22),
         _SectionHeader(
           title: 'Debt-free plan',
@@ -2219,8 +2723,9 @@ class InsightsView extends StatelessWidget {
         const SizedBox(height: 8),
         _PayoffPlannerCard(
           data: data,
-          strategy: strategy,
-          onTargetMonthsChanged: onTargetMonthsChanged,
+          schedule: schedule,
+          onEditBudget: onEditBudget,
+          onExportCalendar: onExportCalendar,
         ),
       ],
     );
@@ -2309,7 +2814,7 @@ class _CategoryChart extends StatelessWidget {
         icon: Icons.donut_large_outlined,
         title: 'No categorized spending yet',
         message:
-            'Import Gmail transactions or add one manually to populate analytics.',
+            'Import email transactions or add one manually to populate analytics.',
       );
     }
     final maxValue = entries.first.value;
@@ -2443,16 +2948,134 @@ class _MonthlyChart extends StatelessWidget {
   }
 }
 
+class _SimpleRankedChart extends StatelessWidget {
+  const _SimpleRankedChart({required this.values});
+
+  final Map<String, double> values;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = values.entries.take(6).toList();
+    if (entries.isEmpty) {
+      return const _EmptyPanel(
+        icon: Icons.storefront_outlined,
+        title: 'No merchant data yet',
+        message: 'Imported purchases will show your most-used places here.',
+      );
+    }
+    final maxValue = entries.first.value;
+    return _Panel(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            for (final entry in entries) ...[
+              Row(
+                children: [
+                  Expanded(
+                    flex: 4,
+                    child: Text(
+                      entry.key,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 3,
+                    child: LinearProgressIndicator(
+                      value: maxValue <= 0 ? 0 : entry.value / maxValue,
+                      minHeight: 8,
+                      borderRadius: BorderRadius.circular(4),
+                      color: _gold,
+                      backgroundColor: const Color(0xFFF0F3F2),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: 72,
+                    child: Text(
+                      _compactMoney(entry.value),
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
+              ),
+              if (entry != entries.last) const SizedBox(height: 13),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WeekdayChart extends StatelessWidget {
+  const _WeekdayChart({required this.values});
+
+  final Map<int, double> values;
+
+  @override
+  Widget build(BuildContext context) {
+    const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final maxValue = values.values.fold(0.0, math.max);
+    return _Panel(
+      child: SizedBox(
+        height: 142,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              for (var day = 1; day <= 7; day++)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Container(
+                          height: maxValue <= 0
+                              ? 4
+                              : math.max(4, 82 * (values[day] ?? 0) / maxValue),
+                          decoration: BoxDecoration(
+                            color: day >= 6 ? _gold : _teal,
+                            borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(4),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          labels[day - 1],
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PayoffPlannerCard extends StatelessWidget {
   const _PayoffPlannerCard({
     required this.data,
-    required this.strategy,
-    required this.onTargetMonthsChanged,
+    required this.schedule,
+    required this.onEditBudget,
+    required this.onExportCalendar,
   });
 
   final DebtAppData data;
-  final DebtStrategy strategy;
-  final ValueChanged<int> onTargetMonthsChanged;
+  final PayoffSchedule schedule;
+  final VoidCallback onEditBudget;
+  final VoidCallback onExportCalendar;
 
   @override
   Widget build(BuildContext context) {
@@ -2465,8 +3088,12 @@ class _PayoffPlannerCard extends StatelessWidget {
       );
     }
     final salaryMissing = data.settings.monthlySalary <= 0;
-    final min = strategy.minimumMonths.toDouble();
-    final max = strategy.maximumMonths.toDouble();
+    final feasible =
+        salaryMissing ||
+        schedule.monthlyBudgetDop <=
+            data.settings.monthlySalary -
+                data.settings.monthlyEssentialExpenses +
+                0.01;
     return _Panel(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -2480,16 +3107,20 @@ class _PayoffPlannerCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${strategy.targetMonths} months',
+                        schedule.completed
+                            ? '${schedule.durationMonths} months'
+                            : 'Plan needs adjustment',
                         style: const TextStyle(
                           fontSize: 26,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
                       Text(
-                        'Target debt-free timeline',
+                        schedule.completed
+                            ? 'Estimated debt-free timeline'
+                            : 'Payment does not clear debt within 30 years',
                         style: TextStyle(
-                          color: strategy.feasible ? _muted : _coral,
+                          color: feasible ? _muted : _coral,
                           fontSize: 12,
                         ),
                       ),
@@ -2500,7 +3131,7 @@ class _PayoffPlannerCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      _money.format(strategy.monthlyPayment),
+                      _money.format(schedule.monthlyBudgetDop),
                       style: const TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 18,
@@ -2514,33 +3145,6 @@ class _PayoffPlannerCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            Slider(
-              min: min,
-              max: math.max(min, max),
-              divisions: max > min ? (max - min).round() : null,
-              value: strategy.targetMonths.toDouble().clamp(
-                min,
-                math.max(min, max),
-              ),
-              label: '${strategy.targetMonths} months',
-              onChanged: max <= min
-                  ? null
-                  : (value) => onTargetMonthsChanged(value.round()),
-            ),
-            Row(
-              children: [
-                Text(
-                  '${strategy.minimumMonths} mo',
-                  style: const TextStyle(color: _muted, fontSize: 11),
-                ),
-                const Spacer(),
-                Text(
-                  '${strategy.maximumMonths} mo',
-                  style: const TextStyle(color: _muted, fontSize: 11),
-                ),
-              ],
-            ),
             const SizedBox(height: 14),
             if (salaryMissing)
               const _InlineNotice(
@@ -2551,13 +3155,13 @@ class _PayoffPlannerCard extends StatelessWidget {
               )
             else
               _InlineNotice(
-                icon: strategy.feasible
+                icon: feasible
                     ? Icons.check_circle_outline
                     : Icons.warning_amber_rounded,
-                text: strategy.feasible
-                    ? '${(strategy.paycheckFraction * 100).toStringAsFixed(1)}% of monthly take-home pay · about ${_money.format(strategy.projectedInterest)} projected interest'
-                    : 'This timeline needs more than your income after essential expenses. Move the slider right.',
-                color: strategy.feasible ? _green : _coral,
+                text: feasible
+                    ? '${(schedule.monthlyBudgetDop / data.settings.monthlySalary * 100).toStringAsFixed(1)}% of monthly take-home pay · about ${_money.format(schedule.totalInterestDop)} projected interest'
+                    : 'This commitment is above income after essential expenses. Lower it or update income.',
+                color: feasible ? _green : _coral,
               ),
             const SizedBox(height: 16),
             const Text(
@@ -2565,37 +3169,58 @@ class _PayoffPlannerCard extends StatelessWidget {
               style: TextStyle(fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 8),
-            for (final allocation in strategy.allocations) ...[
-              Row(
-                children: [
-                  Container(width: 3, height: 38, color: _teal),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          allocation.name,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                        Text(
-                          'Pay by day ${allocation.dueDay} · ${allocation.reason}',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _muted, fontSize: 11),
-                        ),
-                      ],
+            if (schedule.months.isNotEmpty)
+              for (final payment in schedule.months.first.payments) ...[
+                Row(
+                  children: [
+                    Container(width: 3, height: 38, color: _teal),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            payment.name,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          Text(
+                            'Pay ${_dateShort.format(payment.date)} · ${payment.reason}',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _muted, fontSize: 11),
+                          ),
+                        ],
+                      ),
                     ),
+                    Text(
+                      _currencyMoney(payment.nativeAmount, payment.currency),
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+                if (payment != schedule.months.first.payments.last)
+                  const Divider(height: 18),
+              ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onEditBudget,
+                    icon: const Icon(Icons.tune),
+                    label: const Text('Commitment'),
                   ),
-                  Text(
-                    _money.format(allocation.amount),
-                    style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onExportCalendar,
+                    icon: const Icon(Icons.calendar_month_outlined),
+                    label: const Text('Calendar'),
                   ),
-                ],
-              ),
-              if (allocation != strategy.allocations.last)
-                const Divider(height: 18),
-            ],
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -2652,9 +3277,9 @@ class SettingsView extends StatelessWidget {
     required this.onNotificationsChanged,
     required this.onTestNotification,
     required this.onBackgroundEmailSyncChanged,
-    required this.onConfigureGmail,
-    required this.onGmailSync,
-    required this.onImportGmail,
+    required this.onConnectEmail,
+    required this.onEmailSync,
+    required this.onImportEmail,
     required this.onRunBackgroundSyncNow,
     required this.onDisconnectEmail,
     required this.onResetData,
@@ -2666,9 +3291,9 @@ class SettingsView extends StatelessWidget {
   final ValueChanged<bool> onNotificationsChanged;
   final VoidCallback onTestNotification;
   final ValueChanged<bool> onBackgroundEmailSyncChanged;
-  final VoidCallback onConfigureGmail;
-  final VoidCallback onGmailSync;
-  final VoidCallback onImportGmail;
+  final VoidCallback onConnectEmail;
+  final VoidCallback onEmailSync;
+  final VoidCallback onImportEmail;
   final VoidCallback onRunBackgroundSyncNow;
   final VoidCallback onDisconnectEmail;
   final VoidCallback onResetData;
@@ -2719,14 +3344,14 @@ class SettingsView extends StatelessWidget {
                   color: settings.emailSyncEnabled ? _green : _muted,
                 ),
                 title: Text(
-                  settings.connectedEmail ?? 'Gmail not connected',
+                  settings.connectedEmail ?? 'Email not connected',
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 subtitle: Text(
                   settings.emailSyncEnabled && settings.lastEmailSyncAt == null
-                      ? 'Connected to Gmail'
+                      ? 'Connected with ${_emailProviderLabel(settings.connectedEmailProvider)}'
                       : settings.lastEmailSyncAt == null
-                      ? 'Tap Connect Gmail to authorize with Google'
+                      ? 'Choose Gmail, Outlook, or iCloud Mail'
                       : 'Last sync ${_dateShort.format(settings.lastEmailSyncAt!)}',
                 ),
               ),
@@ -2749,20 +3374,18 @@ class SettingsView extends StatelessWidget {
                     : const Icon(Icons.login),
                 title: Text(
                   settings.emailSyncEnabled
-                      ? 'Reconnect Gmail'
-                      : 'Connect Gmail',
+                      ? 'Change email connection'
+                      : 'Connect email',
                 ),
-                subtitle: const Text(
-                  'Opens Google sign-in in a browser window',
-                ),
+                subtitle: const Text('Choose your email provider securely'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: syncing ? null : onConfigureGmail,
+                onTap: syncing ? null : onConnectEmail,
               ),
               const Divider(height: 1),
               SwitchListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                 title: const Text(
-                  'Daily background Gmail sync',
+                  'Daily background email sync',
                   style: TextStyle(fontWeight: FontWeight.w800),
                 ),
                 subtitle: Text(
@@ -2791,10 +3414,10 @@ class SettingsView extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.sync),
-                title: Text(syncing ? 'Syncing Gmail' : 'Sync Gmail now'),
+                title: Text(syncing ? 'Syncing email' : 'Update from email'),
                 subtitle: syncing ? Text(syncStatus) : null,
                 trailing: const Icon(Icons.chevron_right),
-                onTap: syncing ? null : onGmailSync,
+                onTap: syncing ? null : onEmailSync,
               ),
               ListTile(
                 enabled: !syncing && settings.emailSyncEnabled,
@@ -2805,7 +3428,7 @@ class SettingsView extends StatelessWidget {
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: !syncing && settings.emailSyncEnabled
-                    ? onImportGmail
+                    ? onImportEmail
                     : null,
               ),
               ListTile(
@@ -3079,16 +3702,35 @@ double _parseMoney(String value) {
       0;
 }
 
+String _currencyMoney(double value, String currency) {
+  if (currency.toUpperCase() == 'USD') {
+    return NumberFormat.currency(
+      symbol: 'US\$',
+      decimalDigits: 2,
+    ).format(value);
+  }
+  return _money.format(value);
+}
+
 int _parseDay(String value) {
   final parsed = int.tryParse(value.trim()) ?? 1;
   return parsed.clamp(1, 31);
 }
+
+String _emailProviderLabel(EmailProvider? provider) => switch (provider) {
+  EmailProvider.gmail => 'Gmail',
+  EmailProvider.outlook => 'Outlook',
+  EmailProvider.icloud => 'iCloud Mail',
+  null => 'email',
+};
 
 String _transactionKindLabel(TransactionKind kind) => switch (kind) {
   TransactionKind.purchase => 'Purchase',
   TransactionKind.withdrawal => 'Cash withdrawal',
   TransactionKind.cardPayment => 'Card payment',
   TransactionKind.income => 'Income / salary',
+  TransactionKind.transferIn => 'Transfer received',
+  TransactionKind.transferOut => 'Transfer sent',
   TransactionKind.adjustment => 'Balance correction',
   TransactionKind.refund => 'Refund',
 };
@@ -3098,6 +3740,8 @@ IconData _transactionKindIcon(TransactionKind kind) => switch (kind) {
   TransactionKind.withdrawal => Icons.local_atm_outlined,
   TransactionKind.cardPayment => Icons.credit_score_outlined,
   TransactionKind.income => Icons.payments_outlined,
+  TransactionKind.transferIn => Icons.south_west,
+  TransactionKind.transferOut => Icons.north_east,
   TransactionKind.adjustment => Icons.tune_outlined,
   TransactionKind.refund => Icons.keyboard_return_outlined,
 };
@@ -3114,6 +3758,7 @@ String _categoryLabel(SpendingCategory category) => switch (category) {
   SpendingCategory.cash => 'Cash',
   SpendingCategory.income => 'Income',
   SpendingCategory.payments => 'Payments',
+  SpendingCategory.transfers => 'Transfers',
   SpendingCategory.other => 'Other',
 };
 
@@ -3129,6 +3774,7 @@ IconData _categoryIcon(SpendingCategory category) => switch (category) {
   SpendingCategory.cash => Icons.local_atm_outlined,
   SpendingCategory.income => Icons.payments_outlined,
   SpendingCategory.payments => Icons.credit_score_outlined,
+  SpendingCategory.transfers => Icons.swap_horiz,
   SpendingCategory.other => Icons.category_outlined,
 };
 
@@ -3144,6 +3790,7 @@ Color _categoryColor(SpendingCategory category) => switch (category) {
   SpendingCategory.cash => const Color(0xFF6D7680),
   SpendingCategory.income => _green,
   SpendingCategory.payments => _teal,
+  SpendingCategory.transfers => const Color(0xFF476B5D),
   SpendingCategory.other => _muted,
 };
 

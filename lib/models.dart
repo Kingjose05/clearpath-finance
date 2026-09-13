@@ -32,6 +32,9 @@ double moneyFromJson(Object? value) {
   return 0;
 }
 
+double amountInDop(double amount, String currency, double exchangeRate) =>
+    currency.toUpperCase() == 'USD' ? amount * exchangeRate : amount;
+
 enum PurchaseSource {
   manual,
   email;
@@ -54,11 +57,38 @@ enum AccountType {
   );
 }
 
+enum EmailProvider {
+  gmail,
+  outlook,
+  icloud;
+
+  static EmailProvider? fromJson(String? value) {
+    if (value == null) return null;
+    for (final provider in EmailProvider.values) {
+      if (provider.name == value) return provider;
+    }
+    return null;
+  }
+}
+
+enum PaymentBudgetMode {
+  amount,
+  percent;
+
+  static PaymentBudgetMode fromJson(String? value) =>
+      PaymentBudgetMode.values.firstWhere(
+        (mode) => mode.name == value,
+        orElse: () => PaymentBudgetMode.amount,
+      );
+}
+
 enum TransactionKind {
   purchase,
   withdrawal,
   cardPayment,
   income,
+  transferIn,
+  transferOut,
   adjustment,
   refund;
 
@@ -81,6 +111,7 @@ enum SpendingCategory {
   cash,
   income,
   payments,
+  transfers,
   other;
 
   static SpendingCategory fromJson(String? value) =>
@@ -106,8 +137,10 @@ class CreditCard {
     this.reminderDaysBefore = 3,
     this.emailMatchTerms = const [],
     this.accountType = AccountType.credit,
+    this.currency = 'DOP',
     this.installmentBalance = 0,
     this.installmentMonthlyPayment = 0,
+    this.needsReview = false,
   });
 
   final String id;
@@ -124,8 +157,10 @@ class CreditCard {
   final int reminderDaysBefore;
   final List<String> emailMatchTerms;
   final AccountType accountType;
+  final String currency;
   final double installmentBalance;
   final double installmentMonthlyPayment;
+  final bool needsReview;
 
   bool get isCredit => accountType == AccountType.credit;
   bool get isDebit => accountType == AccountType.debit;
@@ -159,8 +194,10 @@ class CreditCard {
     int? reminderDaysBefore,
     List<String>? emailMatchTerms,
     AccountType? accountType,
+    String? currency,
     double? installmentBalance,
     double? installmentMonthlyPayment,
+    bool? needsReview,
   }) {
     return CreditCard(
       id: id ?? this.id,
@@ -179,9 +216,11 @@ class CreditCard {
       reminderDaysBefore: reminderDaysBefore ?? this.reminderDaysBefore,
       emailMatchTerms: emailMatchTerms ?? this.emailMatchTerms,
       accountType: accountType ?? this.accountType,
+      currency: currency ?? this.currency,
       installmentBalance: installmentBalance ?? this.installmentBalance,
       installmentMonthlyPayment:
           installmentMonthlyPayment ?? this.installmentMonthlyPayment,
+      needsReview: needsReview ?? this.needsReview,
     );
   }
 
@@ -200,8 +239,10 @@ class CreditCard {
     'reminderDaysBefore': reminderDaysBefore,
     'emailMatchTerms': emailMatchTerms,
     'accountType': accountType.name,
+    'currency': currency,
     'installmentBalance': installmentBalance,
     'installmentMonthlyPayment': installmentMonthlyPayment,
+    'needsReview': needsReview,
   };
 
   factory CreditCard.fromJson(Map<String, Object?> json) {
@@ -224,10 +265,12 @@ class CreditCard {
           .map((term) => term.toString())
           .toList(),
       accountType: AccountType.fromJson(json['accountType'] as String?),
+      currency: json['currency'] as String? ?? 'DOP',
       installmentBalance: moneyFromJson(json['installmentBalance']),
       installmentMonthlyPayment: moneyFromJson(
         json['installmentMonthlyPayment'],
       ),
+      needsReview: json['needsReview'] as bool? ?? false,
     );
   }
 }
@@ -459,12 +502,18 @@ class AppSettings {
     this.defaultReminderDaysBefore = 3,
     this.reminderHour = 9,
     this.connectedEmail,
+    this.connectedEmailProvider,
     this.lastEmailSyncAt,
     this.lastBackgroundEmailSyncAt,
     this.lastEmailSyncStatus,
     this.monthlySalary = 0,
     this.monthlyEssentialExpenses = 0,
     this.targetPayoffMonths = 12,
+    this.lastCalibrationAt,
+    this.paymentBudgetMode = PaymentBudgetMode.percent,
+    this.monthlyDebtBudget = 0,
+    this.salaryDebtPercent = 25,
+    this.exchangeRateDopPerUsd = 60,
   });
 
   final bool notificationsEnabled;
@@ -473,12 +522,23 @@ class AppSettings {
   final int defaultReminderDaysBefore;
   final int reminderHour;
   final String? connectedEmail;
+  final EmailProvider? connectedEmailProvider;
   final DateTime? lastEmailSyncAt;
   final DateTime? lastBackgroundEmailSyncAt;
   final String? lastEmailSyncStatus;
   final double monthlySalary;
   final double monthlyEssentialExpenses;
   final int targetPayoffMonths;
+  final DateTime? lastCalibrationAt;
+  final PaymentBudgetMode paymentBudgetMode;
+  final double monthlyDebtBudget;
+  final double salaryDebtPercent;
+  final double exchangeRateDopPerUsd;
+
+  double get plannedMonthlyDebtPayment => switch (paymentBudgetMode) {
+    PaymentBudgetMode.amount => monthlyDebtBudget,
+    PaymentBudgetMode.percent => monthlySalary * salaryDebtPercent / 100,
+  };
 
   AppSettings copyWith({
     bool? notificationsEnabled,
@@ -488,6 +548,8 @@ class AppSettings {
     int? reminderHour,
     String? connectedEmail,
     bool clearConnectedEmail = false,
+    EmailProvider? connectedEmailProvider,
+    bool clearConnectedEmailProvider = false,
     DateTime? lastEmailSyncAt,
     bool clearLastEmailSyncAt = false,
     DateTime? lastBackgroundEmailSyncAt,
@@ -497,6 +559,12 @@ class AppSettings {
     double? monthlySalary,
     double? monthlyEssentialExpenses,
     int? targetPayoffMonths,
+    DateTime? lastCalibrationAt,
+    bool clearLastCalibrationAt = false,
+    PaymentBudgetMode? paymentBudgetMode,
+    double? monthlyDebtBudget,
+    double? salaryDebtPercent,
+    double? exchangeRateDopPerUsd,
   }) {
     return AppSettings(
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
@@ -509,6 +577,9 @@ class AppSettings {
       connectedEmail: clearConnectedEmail
           ? null
           : connectedEmail ?? this.connectedEmail,
+      connectedEmailProvider: clearConnectedEmailProvider
+          ? null
+          : connectedEmailProvider ?? this.connectedEmailProvider,
       lastEmailSyncAt: clearLastEmailSyncAt
           ? null
           : lastEmailSyncAt ?? this.lastEmailSyncAt,
@@ -522,6 +593,14 @@ class AppSettings {
       monthlyEssentialExpenses:
           monthlyEssentialExpenses ?? this.monthlyEssentialExpenses,
       targetPayoffMonths: targetPayoffMonths ?? this.targetPayoffMonths,
+      lastCalibrationAt: clearLastCalibrationAt
+          ? null
+          : lastCalibrationAt ?? this.lastCalibrationAt,
+      paymentBudgetMode: paymentBudgetMode ?? this.paymentBudgetMode,
+      monthlyDebtBudget: monthlyDebtBudget ?? this.monthlyDebtBudget,
+      salaryDebtPercent: salaryDebtPercent ?? this.salaryDebtPercent,
+      exchangeRateDopPerUsd:
+          exchangeRateDopPerUsd ?? this.exchangeRateDopPerUsd,
     );
   }
 
@@ -532,12 +611,18 @@ class AppSettings {
     'defaultReminderDaysBefore': defaultReminderDaysBefore,
     'reminderHour': reminderHour,
     'connectedEmail': connectedEmail,
+    'connectedEmailProvider': connectedEmailProvider?.name,
     'lastEmailSyncAt': lastEmailSyncAt?.toIso8601String(),
     'lastBackgroundEmailSyncAt': lastBackgroundEmailSyncAt?.toIso8601String(),
     'lastEmailSyncStatus': lastEmailSyncStatus,
     'monthlySalary': monthlySalary,
     'monthlyEssentialExpenses': monthlyEssentialExpenses,
     'targetPayoffMonths': targetPayoffMonths,
+    'lastCalibrationAt': lastCalibrationAt?.toIso8601String(),
+    'paymentBudgetMode': paymentBudgetMode.name,
+    'monthlyDebtBudget': monthlyDebtBudget,
+    'salaryDebtPercent': salaryDebtPercent,
+    'exchangeRateDopPerUsd': exchangeRateDopPerUsd,
   };
 
   factory AppSettings.fromJson(Map<String, Object?> json) {
@@ -549,6 +634,9 @@ class AppSettings {
       defaultReminderDaysBefore: json['defaultReminderDaysBefore'] as int? ?? 3,
       reminderHour: json['reminderHour'] as int? ?? 9,
       connectedEmail: json['connectedEmail'] as String?,
+      connectedEmailProvider: EmailProvider.fromJson(
+        json['connectedEmailProvider'] as String?,
+      ),
       lastEmailSyncAt: json['lastEmailSyncAt'] is String
           ? DateTime.tryParse(json['lastEmailSyncAt'] as String)
           : null,
@@ -559,6 +647,19 @@ class AppSettings {
       monthlySalary: moneyFromJson(json['monthlySalary']),
       monthlyEssentialExpenses: moneyFromJson(json['monthlyEssentialExpenses']),
       targetPayoffMonths: json['targetPayoffMonths'] as int? ?? 12,
+      lastCalibrationAt: json['lastCalibrationAt'] is String
+          ? DateTime.tryParse(json['lastCalibrationAt'] as String)
+          : null,
+      paymentBudgetMode: PaymentBudgetMode.fromJson(
+        json['paymentBudgetMode'] as String?,
+      ),
+      monthlyDebtBudget: moneyFromJson(json['monthlyDebtBudget']),
+      salaryDebtPercent: moneyFromJson(json['salaryDebtPercent']) == 0
+          ? 25
+          : moneyFromJson(json['salaryDebtPercent']),
+      exchangeRateDopPerUsd: moneyFromJson(json['exchangeRateDopPerUsd']) == 0
+          ? 60
+          : moneyFromJson(json['exchangeRateDopPerUsd']),
     );
   }
 }
@@ -581,12 +682,30 @@ class DebtAppData {
   final List<Loan> loans;
 
   double get totalDebt =>
-      cards.fold(0.0, (total, card) => total + card.totalOwed) +
+      cards.fold(
+        0.0,
+        (total, card) =>
+            total +
+            amountInDop(
+              card.totalOwed,
+              card.currency,
+              settings.exchangeRateDopPerUsd,
+            ),
+      ) +
       loans.fold(0.0, (total, loan) => total + loan.balance);
 
   double get availableCash => cards
       .where((card) => card.isDebit)
-      .fold(0.0, (total, card) => total + card.balance);
+      .fold(
+        0.0,
+        (total, card) =>
+            total +
+            amountInDop(
+              card.balance,
+              card.currency,
+              settings.exchangeRateDopPerUsd,
+            ),
+      );
 
   double get totalMinimumDue =>
       cards
@@ -595,10 +714,14 @@ class DebtAppData {
             0.0,
             (total, card) =>
                 total +
-                math.min(card.minimumDue, card.balance) +
-                math.min(
-                  card.installmentMonthlyPayment,
-                  card.installmentBalance,
+                amountInDop(
+                  math.min(card.minimumDue, card.balance) +
+                      math.min(
+                        card.installmentMonthlyPayment,
+                        card.installmentBalance,
+                      ),
+                  card.currency,
+                  settings.exchangeRateDopPerUsd,
                 ),
           ) +
       loans.fold(
