@@ -6,12 +6,16 @@ import 'package:web/web.dart' as web;
 class OAuthPopupResult {
   const OAuthPopupResult({
     this.accessToken,
+    this.authorizationCode,
+    this.state,
     this.expiresIn,
     this.error,
     this.cancelled = false,
   });
 
   final String? accessToken;
+  final String? authorizationCode;
+  final String? state;
   final int? expiresIn;
   final String? error;
   final bool cancelled;
@@ -24,6 +28,10 @@ String? webGoogleClientIdFromPage() {
       .querySelector('meta[name="google-oauth-client-id"]')
       ?.getAttribute('content');
 }
+
+String? webMicrosoftClientIdFromPage() => web.document
+    .querySelector('meta[name="microsoft-oauth-client-id"]')
+    ?.getAttribute('content');
 
 Future<OAuthPopupResult> openOAuthPopup(Uri authorizationUri) {
   web.window.open(
@@ -46,13 +54,19 @@ Future<OAuthPopupResult> openOAuthPopup(Uri authorizationUri) {
     final event = rawEvent as web.MessageEvent;
     if (event.origin != Uri.base.origin) return;
     final data = event.data?.dartify();
-    if (data is! Map || data['source'] != 'debt-plan-google-oauth') return;
+    if (data is! Map ||
+        (data['source'] != 'debt-plan-google-oauth' &&
+            data['source'] != 'debt-plan-outlook-oauth')) {
+      return;
+    }
     final accessToken = data['accessToken']?.toString();
     final expiresIn = int.tryParse(data['expiresIn']?.toString() ?? '');
     final error = data['error']?.toString();
     finish(
       OAuthPopupResult(
         accessToken: accessToken,
+        authorizationCode: data['code']?.toString(),
+        state: data['state']?.toString(),
         expiresIn: expiresIn,
         error: error,
         cancelled: data['cancelled'] == true,

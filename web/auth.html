@@ -34,8 +34,12 @@
       if (window.opener && params.size) {
         window.opener.postMessage(
           {
-            source: "debt-plan-google-oauth",
+            source: (params.get("state") || "").startsWith("outlook.")
+              ? "debt-plan-outlook-oauth"
+              : "debt-plan-google-oauth",
             accessToken: params.get("access_token"),
+            code: params.get("code"),
+            state: params.get("state"),
             expiresIn: params.get("expires_in"),
             error: params.get("error") || params.get("error_description"),
             cancelled: params.get("error") === "access_denied",

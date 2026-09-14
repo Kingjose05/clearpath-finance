@@ -14,6 +14,7 @@ import 'services/background_email_sync_service.dart';
 import 'services/email_sync_service.dart';
 import 'services/finance_insights.dart';
 import 'services/notification_service.dart';
+import 'services/outlook_auth_service.dart';
 import 'services/payment_planner.dart';
 import 'services/payoff_calendar.dart';
 
@@ -172,6 +173,7 @@ class DebtPlannerHome extends StatefulWidget {
 class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   int _tabIndex = 0;
   bool _syncing = false;
+  final _outlookAuth = OutlookAuthService();
 
   DebtAppData get data => widget.store.data;
 
@@ -1358,15 +1360,17 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       await _configureGmailOAuth();
       return;
     }
+    if (provider == EmailProvider.outlook) {
+      await _configureOutlookOAuth();
+      return;
+    }
     final providerName = _emailProviderLabel(provider);
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text('$providerName connection'),
         content: Text(
-          provider == EmailProvider.outlook
-              ? 'The Outlook reader is ready for Microsoft Graph, but the public app still needs its own Microsoft application ID before sign-in can be enabled. ClearPath will never ask for your Microsoft password.'
-              : 'Apple does not allow a static browser app to connect directly to iCloud Mail over IMAP. A secure ClearPath mail bridge or the installed iPhone app is required. ClearPath will never ask for your main Apple Account password.',
+          'Apple does not allow a static browser app to connect directly to iCloud Mail over IMAP. A secure ClearPath mail bridge or the installed iPhone app is required. ClearPath will never ask for your main Apple Account password.',
         ),
         actions: [
           FilledButton(
@@ -1376,6 +1380,31 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         ],
       ),
     );
+  }
+
+  Future<void> _configureOutlookOAuth() async {
+    if (_syncing) return;
+    setState(() => _syncing = true);
+    try {
+      final email = await _outlookAuth.connect();
+      await widget.store.updateSettings(
+        data.settings.copyWith(
+          emailSyncEnabled: true,
+          connectedEmailProvider: EmailProvider.outlook,
+          connectedEmail: email,
+          lastEmailSyncStatus:
+              'Outlook connected. Transaction import is being enabled next.',
+        ),
+      );
+      await _saveAndRefresh();
+      if (mounted) {
+        _snack('Outlook connected${email == null ? '' : ' as $email'}.');
+      }
+    } catch (error) {
+      if (mounted) _snack('Outlook connection failed: $error');
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
   }
 
   Future<void> _configureGmailOAuth() async {
