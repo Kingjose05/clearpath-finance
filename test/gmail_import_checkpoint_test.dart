@@ -46,4 +46,135 @@ void main() {
       expect(resumed.data.settings.lastEmailSyncAt, isNull);
     },
   );
+
+  test('paired transfer emails update both debit balances once', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final store = AppStore(prefs);
+    await store.load();
+    await store.upsertCard(
+      const CreditCard(
+        id: 'bank-a',
+        name: 'Bank A',
+        lastFour: '1111',
+        balance: 1000,
+        creditLimit: 0,
+        apr: 0,
+        cutoffDay: 1,
+        dueDay: 1,
+        minimumDue: 0,
+        accentColor: 0,
+        accountType: AccountType.debit,
+      ),
+    );
+    await store.upsertCard(
+      const CreditCard(
+        id: 'bank-b',
+        name: 'Bank B',
+        lastFour: '2222',
+        balance: 500,
+        creditLimit: 0,
+        apr: 0,
+        cutoffDay: 1,
+        dueDay: 1,
+        minimumDue: 0,
+        accentColor: 0,
+        accountType: AccountType.debit,
+      ),
+    );
+
+    final sent = Purchase(
+      id: 'sent',
+      cardId: 'bank-a',
+      merchant: 'Transfer to Bank B',
+      amount: 100,
+      purchasedAt: DateTime(2026, 9, 10),
+      source: PurchaseSource.email,
+      sourceMessageId: 'message-a',
+      kind: TransactionKind.transferOut,
+      category: SpendingCategory.transfers,
+      transferReference: 'ABC-123',
+    );
+    final received = Purchase(
+      id: 'received',
+      cardId: 'bank-b',
+      merchant: 'Transfer from Bank A',
+      amount: 100,
+      purchasedAt: DateTime(2026, 9, 10),
+      source: PurchaseSource.email,
+      sourceMessageId: 'message-b',
+      kind: TransactionKind.transferIn,
+      category: SpendingCategory.transfers,
+      transferReference: 'ABC-123',
+    );
+
+    expect(await store.importPurchases([sent, received]), 1);
+    expect(store.data.cardById('bank-a')!.balance, 900);
+    expect(store.data.cardById('bank-b')!.balance, 600);
+    expect(store.data.purchases, hasLength(1));
+  });
+
+  test(
+    'a late second transfer email fills the missing debit leg once',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = AppStore(prefs);
+      await store.load();
+      await store.upsertCard(
+        const CreditCard(
+          id: 'bank-a',
+          name: 'Bank A',
+          lastFour: '1111',
+          balance: 1000,
+          creditLimit: 0,
+          apr: 0,
+          cutoffDay: 1,
+          dueDay: 1,
+          minimumDue: 0,
+          accentColor: 0,
+          accountType: AccountType.debit,
+        ),
+      );
+      await store.upsertCard(
+        const CreditCard(
+          id: 'bank-b',
+          name: 'Bank B',
+          lastFour: '2222',
+          balance: 500,
+          creditLimit: 0,
+          apr: 0,
+          cutoffDay: 1,
+          dueDay: 1,
+          minimumDue: 0,
+          accentColor: 0,
+          accountType: AccountType.debit,
+        ),
+      );
+      final sent = Purchase(
+        id: 'sent',
+        cardId: 'bank-a',
+        merchant: 'Transfer to Bank B',
+        amount: 100,
+        purchasedAt: DateTime(2026, 9, 10),
+        source: PurchaseSource.email,
+        sourceMessageId: 'message-a',
+        kind: TransactionKind.transferOut,
+        transferReference: 'LATE-123',
+      );
+      final received = sent.copyWith(
+        id: 'received',
+        cardId: 'bank-b',
+        merchant: 'Transfer from Bank A',
+        sourceMessageId: 'message-b',
+        kind: TransactionKind.transferIn,
+      );
+
+      expect(await store.importPurchases([sent]), 1);
+      expect(await store.importPurchases([received]), 0);
+      expect(store.data.cardById('bank-a')!.balance, 900);
+      expect(store.data.cardById('bank-b')!.balance, 600);
+      expect(store.data.purchases, hasLength(1));
+    },
+  );
 }

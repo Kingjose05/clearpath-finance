@@ -693,6 +693,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       for (final candidate in candidates)
         candidate.key: TextEditingController(text: '${candidate.dueDay}'),
     };
+    final types = {
+      for (final candidate in candidates) candidate.key: candidate.accountType,
+    };
     final submitted = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -700,136 +703,163 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
       ),
-      builder: (context) => _SheetFrame(
-        title: 'Review statement import',
-        children: [
-          const Text(
-            'OCR is a starting point. Confirm every value before saving. Each currency is kept as its own account, and cuotas stay separate from revolving debt.',
-            style: TextStyle(color: _muted),
-          ),
-          const SizedBox(height: 14),
-          for (final candidate in candidates) ...[
-            if (candidate.source.imageBytes != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.memory(
-                  candidate.source.imageBytes!,
-                  height: 150,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                ),
-              ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '${candidate.source.fileName} · ${candidate.currency}',
-                    style: const TextStyle(fontWeight: FontWeight.w900),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocalState) => _SheetFrame(
+          title: 'Review statement import',
+          children: [
+            const Text(
+              'OCR is a starting point. Confirm every value before saving. Each currency is kept as its own account, and cuotas stay separate from revolving debt.',
+              style: TextStyle(color: _muted),
+            ),
+            const SizedBox(height: 14),
+            for (final candidate in candidates) ...[
+              if (candidate.source.imageBytes != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(
+                    candidate.source.imageBytes!,
+                    height: 150,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
                   ),
                 ),
-                if (candidate.source.rawText.isNotEmpty)
-                  const _StatusChip(label: 'OCR read', color: _teal),
-              ],
-            ),
-            if (candidate.source.currentTotalDop != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 5),
-                child: Text(
-                  'Detected current total: ${_currencyMoney(candidate.source.currentTotalDop!, 'DOP')}. Revolving and cuota values below are kept separate.',
-                  style: const TextStyle(color: _muted, fontSize: 12),
-                ),
-              ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: names[candidate.key],
-                    decoration: const InputDecoration(
-                      labelText: 'Account name',
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${candidate.source.fileName} · ${candidate.currency}',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                SizedBox(
-                  width: 105,
-                  child: TextField(
-                    controller: lastFours[candidate.key],
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Last four'),
+                  if (candidate.source.rawText.isNotEmpty)
+                    const _StatusChip(label: 'OCR read', color: _teal),
+                ],
+              ),
+              if (candidate.source.currentTotalDop != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 5),
+                  child: Text(
+                    'Detected current total: ${_currencyMoney(candidate.source.currentTotalDop!, 'DOP')}. Revolving and cuota values below are kept separate.',
+                    style: const TextStyle(color: _muted, fontSize: 12),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            _MoneyField(
-              controller: balances[candidate.key]!,
-              label: candidate.currency == 'USD'
-                  ? 'Statement balance (USD)'
-                  : 'Revolving balance (DOP)',
-            ),
-            const SizedBox(height: 10),
-            _MoneyField(
-              controller: minimums[candidate.key]!,
-              label: 'Minimum payment (${candidate.currency})',
-            ),
-            if (candidate.currency == 'DOP') ...[
               const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
-                    child: _MoneyField(
-                      controller: installmentBalances[candidate.key]!,
-                      label: 'Separate cuota balance',
+                    child: TextField(
+                      controller: names[candidate.key],
+                      decoration: const InputDecoration(
+                        labelText: 'Account name',
+                      ),
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Expanded(
-                    child: _MoneyField(
-                      controller: installmentPayments[candidate.key]!,
-                      label: 'Monthly cuota',
+                  SizedBox(
+                    width: 105,
+                    child: TextField(
+                      controller: lastFours[candidate.key],
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Last four'),
                     ),
                   ),
                 ],
               ),
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Text(
-                  'Leave cuota balance at the estimated amount if the statement only shows the monthly installment; it will not be added to revolving debt.',
-                  style: TextStyle(color: _muted, fontSize: 12),
-                ),
-              ),
-            ],
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _NumberField(
-                    controller: cutoffs[candidate.key]!,
-                    label: 'Cutoff day',
+              const SizedBox(height: 10),
+              SegmentedButton<AccountType>(
+                segments: const [
+                  ButtonSegment(
+                    value: AccountType.debit,
+                    label: Text('Debit / cash'),
+                    icon: Icon(Icons.account_balance_wallet_outlined),
                   ),
+                  ButtonSegment(
+                    value: AccountType.credit,
+                    label: Text('Credit card'),
+                    icon: Icon(Icons.credit_card),
+                  ),
+                ],
+                selected: {types[candidate.key]!},
+                onSelectionChanged: (value) =>
+                    setLocalState(() => types[candidate.key] = value.first),
+              ),
+              const SizedBox(height: 10),
+              _MoneyField(
+                controller: balances[candidate.key]!,
+                label: types[candidate.key] == AccountType.debit
+                    ? 'Available balance (${candidate.currency})'
+                    : candidate.currency == 'USD'
+                    ? 'Statement balance (USD)'
+                    : 'Revolving balance (DOP)',
+              ),
+              if (types[candidate.key] == AccountType.credit) ...[
+                const SizedBox(height: 10),
+                _MoneyField(
+                  controller: minimums[candidate.key]!,
+                  label: 'Minimum payment (${candidate.currency})',
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _NumberField(
-                    controller: dues[candidate.key]!,
-                    label: 'Due day',
+              ],
+              if (types[candidate.key] == AccountType.credit &&
+                  candidate.currency == 'DOP') ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _MoneyField(
+                        controller: installmentBalances[candidate.key]!,
+                        label: 'Separate cuota balance',
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _MoneyField(
+                        controller: installmentPayments[candidate.key]!,
+                        label: 'Monthly cuota',
+                      ),
+                    ),
+                  ],
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: Text(
+                    'Leave cuota balance at the estimated amount if the statement only shows the monthly installment; it will not be added to revolving debt.',
+                    style: TextStyle(color: _muted, fontSize: 12),
                   ),
                 ),
               ],
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Divider(height: 1),
+              if (types[candidate.key] == AccountType.credit) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _NumberField(
+                        controller: cutoffs[candidate.key]!,
+                        label: 'Cutoff day',
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _NumberField(
+                        controller: dues[candidate.key]!,
+                        label: 'Due day',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Divider(height: 1),
+              ),
+            ],
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.verified_outlined),
+              label: const Text('Save confirmed balances'),
             ),
           ],
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(context, true),
-            icon: const Icon(Icons.verified_outlined),
-            label: const Text('Save confirmed balances'),
-          ),
-        ],
+        ),
       ),
     );
     if (submitted != true) return;
@@ -844,23 +874,33 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
               : names[candidate.key]!.text.trim(),
           lastFour: lastFours[candidate.key]!.text.trim(),
           balance: balance,
-          creditLimit: existing?.creditLimit ?? math.max(balance, 1),
+          creditLimit:
+              existing?.creditLimit ??
+              (types[candidate.key] == AccountType.credit
+                  ? math.max(balance, 1)
+                  : 0),
           apr: existing?.apr ?? 0,
           cutoffDay: _parseDay(cutoffs[candidate.key]!.text),
           dueDay: _parseDay(dues[candidate.key]!.text),
-          minimumDue: _parseMoney(minimums[candidate.key]!.text),
+          minimumDue: types[candidate.key] == AccountType.credit
+              ? _parseMoney(minimums[candidate.key]!.text)
+              : 0,
           accentColor: existing?.accentColor ?? _teal.toARGB32(),
           lastPaymentDate: existing?.lastPaymentDate,
           reminderDaysBefore:
               existing?.reminderDaysBefore ??
               data.settings.defaultReminderDaysBefore,
           emailMatchTerms: existing?.emailMatchTerms ?? const [],
-          accountType: AccountType.credit,
+          accountType: types[candidate.key]!,
           currency: candidate.currency,
-          installmentBalance: candidate.currency == 'DOP'
+          installmentBalance:
+              types[candidate.key] == AccountType.credit &&
+                  candidate.currency == 'DOP'
               ? _parseMoney(installmentBalances[candidate.key]!.text)
               : 0,
-          installmentMonthlyPayment: candidate.currency == 'DOP'
+          installmentMonthlyPayment:
+              types[candidate.key] == AccountType.credit &&
+                  candidate.currency == 'DOP'
               ? _parseMoney(installmentPayments[candidate.key]!.text)
               : 0,
           calibratedCutoffDate: candidate.source.cutoffDate,
@@ -4361,6 +4401,7 @@ class _StatementCandidate {
     required this.index,
     required this.source,
     required this.currency,
+    required this.accountType,
     required this.name,
     required this.lastFour,
     required this.balance,
@@ -4381,6 +4422,9 @@ class _StatementCandidate {
     final statementBalance = currency == 'USD'
         ? draft.statementBalanceUsd
         : draft.statementBalanceDop;
+    final availableBalance = currency == 'USD'
+        ? draft.availableBalanceUsd
+        : draft.availableBalanceDop;
     final minimum = currency == 'USD'
         ? draft.minimumDueUsd
         : draft.minimumDueDop;
@@ -4402,13 +4446,16 @@ class _StatementCandidate {
       index: index,
       source: draft,
       currency: currency,
+      accountType: existing?.accountType ?? draft.accountType,
       name:
           existing?.name ??
           '${draft.bankName.isEmpty ? 'Imported card' : draft.bankName} $currency',
       lastFour: draft.lastFour.isEmpty
           ? existing?.lastFour ?? ''
           : draft.lastFour,
-      balance: statementBalance ?? currentTotal ?? existing?.balance ?? 0,
+      balance: draft.accountType == AccountType.debit
+          ? availableBalance ?? currentTotal ?? existing?.balance ?? 0
+          : statementBalance ?? currentTotal ?? existing?.balance ?? 0,
       minimumDue: minimum ?? existing?.minimumDue ?? 0,
       installmentBalance: estimatedInstallmentBalance.toDouble(),
       installmentMonthlyPayment: monthlyCuota.toDouble(),
@@ -4421,6 +4468,7 @@ class _StatementCandidate {
   final int index;
   final StatementDraft source;
   final String currency;
+  final AccountType accountType;
   final String name;
   final String lastFour;
   final double balance;

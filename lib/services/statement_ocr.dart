@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'statement_ocr_platform.dart'
     if (dart.library.io) 'statement_ocr_native.dart';
 
+import '../models.dart';
+
 class StatementDraft {
   const StatementDraft({
     required this.fileName,
@@ -12,6 +14,9 @@ class StatementDraft {
     this.imageBytes,
     this.bankName = '',
     this.lastFour = '',
+    this.accountType = AccountType.credit,
+    this.availableBalanceDop,
+    this.availableBalanceUsd,
     this.currentTotalDop,
     this.statementBalanceDop,
     this.minimumDueDop,
@@ -28,6 +33,9 @@ class StatementDraft {
   final Uint8List? imageBytes;
   final String bankName;
   final String lastFour;
+  final AccountType accountType;
+  final double? availableBalanceDop;
+  final double? availableBalanceUsd;
   final double? currentTotalDop;
   final double? statementBalanceDop;
   final double? minimumDueDop;
@@ -41,9 +49,13 @@ class StatementDraft {
   bool get hasDop =>
       currentTotalDop != null ||
       statementBalanceDop != null ||
-      minimumDueDop != null;
+      minimumDueDop != null ||
+      availableBalanceDop != null;
 
-  bool get hasUsd => statementBalanceUsd != null || minimumDueUsd != null;
+  bool get hasUsd =>
+      statementBalanceUsd != null ||
+      minimumDueUsd != null ||
+      availableBalanceUsd != null;
 }
 
 class StatementOcrService {
@@ -79,6 +91,14 @@ StatementDraft parseStatementText({
     'balance actual',
     'total a pagar',
   ]);
+  final availableBalanceDop = _amountAfter(normalized, [
+    'available balance',
+    'available funds',
+    'saldo disponible',
+    'balance disponible',
+    'balance actual',
+    'saldo actual',
+  ]);
   final statementBalanceDop = _amountAfter(normalized, [
     'statement balance',
     'saldo al corte',
@@ -110,6 +130,10 @@ StatementDraft parseStatementText({
     'saldo de cuotas',
     'cuotas pendientes',
   ]);
+  final isDebit = RegExp(
+    r'debit|debit card|tarjeta de debito|cuenta de ahorro|cuenta corriente|checking|savings|available balance|saldo disponible|available funds',
+    caseSensitive: false,
+  ).hasMatch(normalized);
 
   return StatementDraft(
     fileName: fileName,
@@ -117,6 +141,11 @@ StatementDraft parseStatementText({
     imageBytes: imageBytes,
     bankName: bankName,
     lastFour: lastFour,
+    accountType: isDebit ? AccountType.debit : AccountType.credit,
+    availableBalanceDop: availableBalanceDop,
+    availableBalanceUsd: isDebit && usdNumbers.isNotEmpty
+        ? usdNumbers.first
+        : null,
     currentTotalDop: currentTotalDop,
     statementBalanceDop: statementBalanceDop,
     minimumDueDop: minimumDueDop,

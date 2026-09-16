@@ -324,6 +324,8 @@ class Purchase {
     this.kind = TransactionKind.purchase,
     this.category = SpendingCategory.other,
     this.currency = 'DOP',
+    this.transferReference,
+    this.relatedCardId,
   });
 
   final String id;
@@ -338,6 +340,8 @@ class Purchase {
   final TransactionKind kind;
   final SpendingCategory category;
   final String currency;
+  final String? transferReference;
+  final String? relatedCardId;
 
   Purchase copyWith({
     String? id,
@@ -352,6 +356,9 @@ class Purchase {
     TransactionKind? kind,
     SpendingCategory? category,
     String? currency,
+    String? transferReference,
+    String? relatedCardId,
+    bool clearRelatedCardId = false,
   }) {
     return Purchase(
       id: id ?? this.id,
@@ -366,6 +373,10 @@ class Purchase {
       kind: kind ?? this.kind,
       category: category ?? this.category,
       currency: currency ?? this.currency,
+      transferReference: transferReference ?? this.transferReference,
+      relatedCardId: clearRelatedCardId
+          ? null
+          : relatedCardId ?? this.relatedCardId,
     );
   }
 
@@ -382,6 +393,8 @@ class Purchase {
     'kind': kind.name,
     'category': category.name,
     'currency': currency,
+    'transferReference': transferReference,
+    'relatedCardId': relatedCardId,
   };
 
   factory Purchase.fromJson(Map<String, Object?> json) {
@@ -400,6 +413,8 @@ class Purchase {
       kind: TransactionKind.fromJson(json['kind'] as String?),
       category: SpendingCategory.fromJson(json['category'] as String?),
       currency: json['currency'] as String? ?? 'DOP',
+      transferReference: json['transferReference'] as String?,
+      relatedCardId: json['relatedCardId'] as String?,
     );
   }
 }

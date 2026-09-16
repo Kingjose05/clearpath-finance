@@ -443,6 +443,14 @@ class GmailPurchaseSyncService {
             discoveredByLastFour[transaction.lastFour] = card;
             knownCards.add(card);
           }
+          final relatedCard = transaction.counterpartyLastFour == null
+              ? null
+              : _firstCardWithLastFour(
+                  knownCards,
+                  transaction.counterpartyLastFour!,
+                  accountType: AccountType.debit,
+                  currency: transaction.currency,
+                );
           parsed.add(
             Purchase(
               id: newId('email'),
@@ -456,6 +464,8 @@ class GmailPurchaseSyncService {
               kind: transaction.kind,
               category: transaction.category,
               currency: transaction.currency,
+              transferReference: transaction.transferReference,
+              relatedCardId: relatedCard?.id,
             ),
           );
         }

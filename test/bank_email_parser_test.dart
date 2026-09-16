@@ -179,4 +179,25 @@ void main() {
       expect(result.single.kind, TransactionKind.transferIn);
     },
   );
+
+  test('extracts transfer reference and counterparty account suffix', () {
+    final result = parseBankTransactions(
+      bankMessage(
+        from: 'alerts@bhd.com.do',
+        subject: 'Transferencia enviada',
+        body: '''
+        Debito a su cuenta de ahorro terminada en 1111
+        Cuenta destino terminada en 2222
+        Monto: DOP 1,000.00
+        Fecha: 10/09/2026
+        Referencia: ABC-123
+        Concepto: Transferencia enviada
+      ''',
+      ),
+    );
+    expect(result, hasLength(1));
+    expect(result.single.kind, TransactionKind.transferOut);
+    expect(result.single.transferReference, 'ABC-123');
+    expect(result.single.counterpartyLastFour, '2222');
+  });
 }

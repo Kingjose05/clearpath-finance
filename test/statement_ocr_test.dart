@@ -28,6 +28,19 @@ Mas Limite installment amount due 4,708.67''',
     expect(draft.dueDate, DateTime(2026, 9, 12));
   });
 
+  test('parses debit-account available balance from a screenshot', () {
+    final draft = parseStatementText(
+      fileName: 'bank-a-debit.png',
+      text: '''Banco Popular debit card ending 4412
+Cuenta de ahorro
+Saldo disponible DOP 125,000.50''',
+    );
+
+    expect(draft.accountType, AccountType.debit);
+    expect(draft.lastFour, '4412');
+    expect(draft.availableBalanceDop, 125000.50);
+  });
+
   test('allocates minimums across cards and loans before APR avalanche', () {
     final cards = [
       CreditCard(

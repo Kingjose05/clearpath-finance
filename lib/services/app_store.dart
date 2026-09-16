@@ -77,11 +77,7 @@ class AppStore {
   }
 
   Future<void> addPurchase(Purchase purchase) async {
-    final cards = _data.cards.map((card) {
-      if (card.id != purchase.cardId) return card;
-      final balance = _balanceAfterTransaction(card, purchase);
-      return card.copyWith(balance: balance);
-    }).toList();
+    final cards = _applyPurchaseToCards([..._data.cards], purchase);
     _data = _data.copyWith(
       cards: cards,
       purchases: [purchase, ..._data.purchases],
@@ -104,19 +100,35 @@ class AppStore {
     if (fresh.isEmpty) return 0;
 
     var cards = [..._data.cards];
+    var savedPurchases = [..._data.purchases];
+    var logicalImports = 0;
+    var changed = false;
     for (final purchase in fresh) {
-      cards = cards.map((card) {
-        if (card.id != purchase.cardId) return card;
-        return card.copyWith(balance: _balanceAfterTransaction(card, purchase));
-      }).toList();
+      final matchingIndex = _matchingTransferIndex(savedPurchases, purchase);
+      if (matchingIndex != -1) {
+        final existing = savedPurchases[matchingIndex];
+        // The first email may have been one-sided. Apply the missing account
+        // leg when the second bank email arrives, but keep one logical record.
+        if (existing.relatedCardId == null &&
+            existing.cardId != purchase.cardId) {
+          cards = _applyPurchaseToCards(cards, purchase, applyRelated: false);
+          savedPurchases[matchingIndex] = existing.copyWith(
+            relatedCardId: purchase.cardId,
+          );
+          changed = true;
+        }
+        continue;
+      }
+      cards = _applyPurchaseToCards(cards, purchase);
+      savedPurchases = [purchase, ...savedPurchases];
+      logicalImports++;
+      changed = true;
     }
 
-    _data = _data.copyWith(
-      cards: cards,
-      purchases: [...fresh, ..._data.purchases],
-    );
+    if (!changed) return 0;
+    _data = _data.copyWith(cards: cards, purchases: savedPurchases);
     await save();
-    return fresh.length;
+    return logicalImports;
   }
 
   Future<void> addPaycheck(Paycheck paycheck) async {
@@ -169,6 +181,110 @@ class AppStore {
   }
 }
 
+List<CreditCard> _applyPurchaseToCards(
+  List<CreditCard> cards,
+  Purchase purchase, {
+  bool applyRelated = true,
+}) {
+  List<CreditCard> update(
+    List<CreditCard> source,
+    String cardId,
+    Purchase transaction,
+  ) {
+    return source.map((card) {
+      if (card.id != cardId) return card;
+      return card.copyWith(
+        balance: _balanceAfterTransaction(card, transaction),
+      );
+    }).toList();
+  }
+
+  var updated = update(cards, purchase.cardId, purchase);
+  if (applyRelated &&
+      purchase.isTransfer &&
+      purchase.relatedCardId != null &&
+      purchase.relatedCardId != purchase.cardId) {
+    final oppositeKind = purchase.kind == TransactionKind.transferOut
+        ? TransactionKind.transferIn
+        : TransactionKind.transferOut;
+    updated = update(
+      updated,
+      purchase.relatedCardId!,
+      purchase.copyWith(
+        cardId: purchase.relatedCardId!,
+        kind: oppositeKind,
+        clearRelatedCardId: true,
+      ),
+    );
+  }
+  return updated;
+}
+
+int _matchingTransferIndex(List<Purchase> purchases, Purchase candidate) {
+  if (!candidate.isTransfer) return -1;
+  for (var index = 0; index < purchases.length; index++) {
+    final existing = purchases[index];
+    if (!existing.isTransfer ||
+        existing.cardId == candidate.cardId ||
+        existing.currency != candidate.currency ||
+        (existing.amount - candidate.amount).abs() > 0.01 ||
+        existing.kind == candidate.kind) {
+      continue;
+    }
+    final dateGap = existing.purchasedAt
+        .difference(candidate.purchasedAt)
+        .abs();
+    if (dateGap > const Duration(days: 2)) continue;
+    if (existing.transferReference != null &&
+        candidate.transferReference != null) {
+      if (existing.transferReference == candidate.transferReference) {
+        return index;
+      }
+      continue;
+    }
+    if (existing.relatedCardId == candidate.cardId ||
+        candidate.relatedCardId == existing.cardId) {
+      return index;
+    }
+    if (_relatedTransferDescriptions(existing.merchant, candidate.merchant)) {
+      return index;
+    }
+    // A same-day, same-currency, same-amount pair with opposite directions
+    // is the common bank-email fallback when neither bank exposes a reference.
+    return index;
+  }
+  return -1;
+}
+
+bool _relatedTransferDescriptions(String left, String right) {
+  final ignored = {
+    'transfer',
+    'transferencia',
+    'received',
+    'recibida',
+    'recibido',
+    'incoming',
+    'outgoing',
+    'enviada',
+    'enviado',
+    'to',
+    'from',
+    'a',
+    'de',
+  };
+  final leftWords = left
+      .toLowerCase()
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((word) => word.length >= 4 && !ignored.contains(word))
+      .toSet();
+  final rightWords = right
+      .toLowerCase()
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((word) => word.length >= 4 && !ignored.contains(word))
+      .toSet();
+  return leftWords.intersection(rightWords).isNotEmpty;
+}
+
 double _balanceAfterTransaction(CreditCard account, Purchase transaction) {
   final amount = transaction.amount;
   if (account.isDebit) {
@@ -188,6 +304,11 @@ double _balanceAfterTransaction(CreditCard account, Purchase transaction) {
     TransactionKind.income => account.balance,
     _ => account.balance + amount,
   };
+}
+
+extension on Purchase {
+  bool get isTransfer =>
+      kind == TransactionKind.transferIn || kind == TransactionKind.transferOut;
 }
 
 String newId(String prefix) =>

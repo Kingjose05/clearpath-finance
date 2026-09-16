@@ -18,6 +18,8 @@ class BankTransaction {
     this.needsReview = false,
     this.kind = TransactionKind.purchase,
     this.category = SpendingCategory.other,
+    this.transferReference,
+    this.counterpartyLastFour,
   });
   final String lastFour;
   final String bank;
@@ -29,6 +31,8 @@ class BankTransaction {
   final bool needsReview;
   final TransactionKind kind;
   final SpendingCategory category;
+  final String? transferReference;
+  final String? counterpartyLastFour;
 }
 
 const _dominicanBankBrands = <String, String>{
@@ -216,6 +220,38 @@ String? _cardNumber(String text) {
   return null;
 }
 
+String? _counterpartyLastFour(String text, String ownLastFour) {
+  final labeled = RegExp(
+    r'(?:destino|origen|beneficiario|beneficiary|cuenta destino|cuenta origen|account destination|account origin)[^\n]{0,80}?(?:terminad[ao](?:\s+en)?|ending(?:\s+in)?|[*xX•●]{2,})?\s*[:#-]?\s*(\d{4})(?!\d)',
+    caseSensitive: false,
+  ).allMatches(text);
+  for (final match in labeled) {
+    final value = match.group(1);
+    if (value != null && value != ownLastFour) return value;
+  }
+  return null;
+}
+
+String? _transferReference(Map<String, String> fields, String text) {
+  final field = _firstField(fields, text, const [
+    'referencia',
+    'reference',
+    'transaction id',
+    'transaction number',
+    'numero de transaccion',
+    'no. de transaccion',
+    'tracking',
+    'confirmation',
+  ]).trim();
+  final match = field.isNotEmpty
+      ? RegExp(r'[A-Za-z0-9][A-Za-z0-9_-]{3,}').firstMatch(field)
+      : RegExp(
+          r'(?:referencia|reference|transaction\s*(?:id|number)|tracking|confirmation)\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,})',
+          caseSensitive: false,
+        ).firstMatch(text);
+  return match?.group(1)?.toUpperCase();
+}
+
 double? parseBankAmount(String text) {
   final match = RegExp(r'\d[\d.,]*').firstMatch(text);
   if (match == null) return null;
@@ -328,6 +364,14 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     'merchant',
     'status',
     'transaction type',
+    'referencia',
+    'reference',
+    'transaction id',
+    'transaction number',
+    'numero de transaccion',
+    'no. de transaccion',
+    'tracking',
+    'confirmation',
   };
   for (final table in doc.querySelectorAll('table')) {
     List<String>? headers;
@@ -419,6 +463,11 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     ]);
     final amount = parseBankAmount(amountText);
     if (amount == null || amount <= 0) continue;
+    final transferReference =
+        kind == TransactionKind.transferIn ||
+            kind == TransactionKind.transferOut
+        ? _transferReference(record, text)
+        : null;
     var merchant = _firstField(record, text, const ['comercio', 'merchant']);
     if (merchant.isEmpty) merchant = _field(record, text, 'cajero');
     if (merchant.isEmpty) merchant = _field(record, text, 'descripcion');
@@ -471,6 +520,12 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
         accountType: accountType,
         needsReview: needsReview,
         kind: kind,
+        transferReference: transferReference,
+        counterpartyLastFour:
+            kind == TransactionKind.transferIn ||
+                kind == TransactionKind.transferOut
+            ? _counterpartyLastFour(text, lastFour)
+            : null,
         category: kind == TransactionKind.withdrawal
             ? SpendingCategory.cash
             : kind == TransactionKind.income
