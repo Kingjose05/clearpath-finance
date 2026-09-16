@@ -584,16 +584,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   }
 
   Future<void> _showStatementImportSheet() async {
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: true,
-      withData: true,
-    );
-    if (picked == null || picked.files.isEmpty || !mounted) return;
+    final picked = await FilePicker.pickFiles(type: FileType.image);
+    if (picked == null || picked.isEmpty || !mounted) return;
 
     final ocr = const StatementOcrService();
     final drafts = <StatementDraft>[];
-    for (final file in picked.files) {
+    for (final file in picked) {
       String text = '';
       try {
         text = await ocr.extractText(file.path);
