@@ -244,7 +244,7 @@ String? _transferReference(Map<String, String> fields, String text) {
     'confirmation',
   ]).trim();
   final match = field.isNotEmpty
-      ? RegExp(r'[A-Za-z0-9][A-Za-z0-9_-]{3,}').firstMatch(field)
+      ? RegExp(r'([A-Za-z0-9][A-Za-z0-9_-]{3,})').firstMatch(field)
       : RegExp(
           r'(?:referencia|reference|transaction\s*(?:id|number)|tracking|confirmation)\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,})',
           caseSensitive: false,
