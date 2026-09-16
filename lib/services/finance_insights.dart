@@ -169,10 +169,8 @@ DebtStrategy buildDebtStrategy({
         ),
         apr: card.apr,
         minimum: amountInDop(
-          math.min(
-            card.totalOwed,
-            card.minimumDue + card.installmentMonthlyPayment,
-          ),
+          math.min(card.minimumDue, card.balance) +
+              math.min(card.installmentMonthlyPayment, card.installmentBalance),
           card.currency,
           exchangeRateDopPerUsd,
         ),
@@ -183,9 +181,17 @@ DebtStrategy buildDebtStrategy({
       DebtStrategyItem(
         id: loan.id,
         name: loan.name,
-        balance: loan.balance,
+        balance: amountInDop(
+          loan.balance,
+          loan.currency,
+          exchangeRateDopPerUsd,
+        ),
         apr: loan.apr,
-        minimum: math.min(loan.balance, loan.minimumPayment),
+        minimum: amountInDop(
+          math.min(loan.balance, loan.minimumPayment),
+          loan.currency,
+          exchangeRateDopPerUsd,
+        ),
         dueDay: loan.dueDay,
         isLoan: true,
       ),

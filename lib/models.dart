@@ -141,6 +141,8 @@ class CreditCard {
     this.installmentBalance = 0,
     this.installmentMonthlyPayment = 0,
     this.needsReview = false,
+    this.calibratedCutoffDate,
+    this.calibratedDueDate,
   });
 
   final String id;
@@ -161,6 +163,8 @@ class CreditCard {
   final double installmentBalance;
   final double installmentMonthlyPayment;
   final bool needsReview;
+  final DateTime? calibratedCutoffDate;
+  final DateTime? calibratedDueDate;
 
   bool get isCredit => accountType == AccountType.credit;
   bool get isDebit => accountType == AccountType.debit;
@@ -171,9 +175,23 @@ class CreditCard {
     return (balance / creditLimit).clamp(0, 1);
   }
 
-  DateTime nextDueDate(DateTime from) => nextMonthlyDate(dueDay, from);
+  DateTime nextDueDate(DateTime from) {
+    final calibrated = calibratedDueDate;
+    if (calibrated != null) {
+      final age = dateOnly(from).difference(dateOnly(calibrated)).inDays;
+      if (age <= 35) return dateOnly(calibrated);
+    }
+    return nextMonthlyDate(dueDay, from);
+  }
 
-  DateTime nextCutoffDate(DateTime from) => nextMonthlyDate(cutoffDay, from);
+  DateTime nextCutoffDate(DateTime from) {
+    final calibrated = calibratedCutoffDate;
+    if (calibrated != null) {
+      final age = dateOnly(from).difference(dateOnly(calibrated)).inDays;
+      if (age <= 35) return dateOnly(calibrated);
+    }
+    return nextMonthlyDate(cutoffDay, from);
+  }
 
   int daysUntilDue(DateTime from) =>
       dateOnly(nextDueDate(from)).difference(dateOnly(from)).inDays;
@@ -198,6 +216,9 @@ class CreditCard {
     double? installmentBalance,
     double? installmentMonthlyPayment,
     bool? needsReview,
+    DateTime? calibratedCutoffDate,
+    DateTime? calibratedDueDate,
+    bool clearCalibratedDates = false,
   }) {
     return CreditCard(
       id: id ?? this.id,
@@ -221,6 +242,12 @@ class CreditCard {
       installmentMonthlyPayment:
           installmentMonthlyPayment ?? this.installmentMonthlyPayment,
       needsReview: needsReview ?? this.needsReview,
+      calibratedCutoffDate: clearCalibratedDates
+          ? null
+          : calibratedCutoffDate ?? this.calibratedCutoffDate,
+      calibratedDueDate: clearCalibratedDates
+          ? null
+          : calibratedDueDate ?? this.calibratedDueDate,
     );
   }
 
@@ -243,6 +270,8 @@ class CreditCard {
     'installmentBalance': installmentBalance,
     'installmentMonthlyPayment': installmentMonthlyPayment,
     'needsReview': needsReview,
+    'calibratedCutoffDate': calibratedCutoffDate?.toIso8601String(),
+    'calibratedDueDate': calibratedDueDate?.toIso8601String(),
   };
 
   factory CreditCard.fromJson(Map<String, Object?> json) {
@@ -271,6 +300,12 @@ class CreditCard {
         json['installmentMonthlyPayment'],
       ),
       needsReview: json['needsReview'] as bool? ?? false,
+      calibratedCutoffDate: json['calibratedCutoffDate'] is String
+          ? DateTime.tryParse(json['calibratedCutoffDate'] as String)
+          : null,
+      calibratedDueDate: json['calibratedDueDate'] is String
+          ? DateTime.tryParse(json['calibratedDueDate'] as String)
+          : null,
     );
   }
 }
@@ -378,6 +413,7 @@ class Loan {
     required this.minimumPayment,
     required this.dueDay,
     this.reminderDaysBefore = 3,
+    this.currency = 'DOP',
   });
 
   final String id;
@@ -387,6 +423,7 @@ class Loan {
   final double minimumPayment;
   final int dueDay;
   final int reminderDaysBefore;
+  final String currency;
 
   Loan copyWith({
     String? id,
@@ -396,6 +433,7 @@ class Loan {
     double? minimumPayment,
     int? dueDay,
     int? reminderDaysBefore,
+    String? currency,
   }) => Loan(
     id: id ?? this.id,
     name: name ?? this.name,
@@ -404,6 +442,7 @@ class Loan {
     minimumPayment: minimumPayment ?? this.minimumPayment,
     dueDay: dueDay ?? this.dueDay,
     reminderDaysBefore: reminderDaysBefore ?? this.reminderDaysBefore,
+    currency: currency ?? this.currency,
   );
 
   Map<String, Object?> toJson() => {
@@ -414,6 +453,7 @@ class Loan {
     'minimumPayment': minimumPayment,
     'dueDay': dueDay,
     'reminderDaysBefore': reminderDaysBefore,
+    'currency': currency,
   };
 
   factory Loan.fromJson(Map<String, Object?> json) => Loan(
@@ -424,6 +464,7 @@ class Loan {
     minimumPayment: moneyFromJson(json['minimumPayment']),
     dueDay: json['dueDay'] as int? ?? 1,
     reminderDaysBefore: json['reminderDaysBefore'] as int? ?? 3,
+    currency: json['currency'] as String? ?? 'DOP',
   );
 }
 
@@ -692,7 +733,16 @@ class DebtAppData {
               settings.exchangeRateDopPerUsd,
             ),
       ) +
-      loans.fold(0.0, (total, loan) => total + loan.balance);
+      loans.fold(
+        0.0,
+        (total, loan) =>
+            total +
+            amountInDop(
+              loan.balance,
+              loan.currency,
+              settings.exchangeRateDopPerUsd,
+            ),
+      );
 
   double get availableCash => cards
       .where((card) => card.isDebit)
@@ -726,7 +776,13 @@ class DebtAppData {
           ) +
       loans.fold(
         0.0,
-        (total, loan) => total + math.min(loan.minimumPayment, loan.balance),
+        (total, loan) =>
+            total +
+            amountInDop(
+              math.min(loan.minimumPayment, loan.balance),
+              loan.currency,
+              settings.exchangeRateDopPerUsd,
+            ),
       );
 
   Paycheck? get latestPaycheck {

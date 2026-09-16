@@ -15,6 +15,7 @@ class PaymentAllocation {
     required this.isAtRisk,
     this.currency = 'DOP',
     this.exchangeRateDopPerUsd = 1,
+    this.isLoan = false,
   });
 
   final String cardId;
@@ -28,6 +29,7 @@ class PaymentAllocation {
   final bool isAtRisk;
   final String currency;
   final double exchangeRateDopPerUsd;
+  final bool isLoan;
 
   double get totalAmount => minimumAmount + extraAmount;
   double get nativeAmount =>
@@ -57,6 +59,13 @@ class PaymentPlan {
     }
     return null;
   }
+
+  PaymentAllocation? allocationForLoan(String loanId) {
+    for (final allocation in allocations) {
+      if (allocation.isLoan && allocation.cardId == loanId) return allocation;
+    }
+    return null;
+  }
 }
 
 class PaymentPlanner {
@@ -64,23 +73,31 @@ class PaymentPlanner {
 
   PaymentPlan buildPlan({
     required List<CreditCard> cards,
+    List<Loan> loans = const [],
     required double paycheckAmount,
     double exchangeRateDopPerUsd = 60,
+    DateTime? now,
   }) {
     final budget = math.max(0, paycheckAmount).toDouble();
-    final now = DateTime.now();
+    final today = now ?? DateTime.now();
     final activeCards = cards
         .where((card) => card.isCredit && card.totalOwed > 0.01)
         .toList();
+    final activeLoans = loans.where((loan) => loan.balance > 0.01).toList();
+    final exchangeRate = math.max(1, exchangeRateDopPerUsd).toDouble();
     final minimums = <String, double>{
       for (final card in activeCards)
         card.id: amountInDop(
-          math.min(
-            card.minimumDue + card.installmentMonthlyPayment,
-            card.totalOwed,
-          ),
+          math.min(card.minimumDue, card.balance) +
+              math.min(card.installmentMonthlyPayment, card.installmentBalance),
           card.currency,
-          exchangeRateDopPerUsd,
+          exchangeRate,
+        ),
+      for (final loan in activeLoans)
+        loan.id: amountInDop(
+          math.min(loan.minimumPayment, loan.balance),
+          loan.currency,
+          exchangeRate,
         ),
     };
     final requiredMinimums = minimums.values.fold(
@@ -90,70 +107,93 @@ class PaymentPlanner {
     var remaining = budget;
     final payments = <String, double>{};
 
-    final byDueDate = [...activeCards]
-      ..sort((a, b) {
-        final dueCompare = a.nextDueDate(now).compareTo(b.nextDueDate(now));
-        return dueCompare != 0 ? dueCompare : b.apr.compareTo(a.apr);
-      });
-    for (final card in byDueDate) {
-      final paid = math.min(minimums[card.id] ?? 0, remaining).toDouble();
-      payments[card.id] = paid;
+    final dueTargets =
+        <_DebtTarget>[
+          ...activeCards.map(
+            (card) => _DebtTarget(
+              id: card.id,
+              name: card.name,
+              accentColor: card.accentColor,
+              dueDate: card.nextDueDate(today),
+              apr: card.apr,
+              currency: card.currency,
+              balanceDop: amountInDop(
+                card.totalOwed,
+                card.currency,
+                exchangeRate,
+              ),
+              isLoan: false,
+            ),
+          ),
+          ...activeLoans.map(
+            (loan) => _DebtTarget(
+              id: loan.id,
+              name: loan.name,
+              accentColor: 0xFF2457A7,
+              dueDate: nextMonthlyDate(loan.dueDay, today),
+              apr: loan.apr,
+              currency: loan.currency,
+              balanceDop: amountInDop(
+                loan.balance,
+                loan.currency,
+                exchangeRate,
+              ),
+              isLoan: true,
+            ),
+          ),
+        ]..sort((a, b) {
+          final dueCompare = a.dueDate.compareTo(b.dueDate);
+          return dueCompare != 0 ? dueCompare : b.apr.compareTo(a.apr);
+        });
+    for (final target in dueTargets) {
+      final paid = math.min(minimums[target.id] ?? 0, remaining).toDouble();
+      payments[target.id] = paid;
       remaining -= paid;
     }
 
-    final byPriority = [...activeCards]
+    final byPriority = [...dueTargets]
       ..sort((a, b) {
         final aprCompare = b.apr.compareTo(a.apr);
         if (aprCompare != 0) return aprCompare;
-        return a.daysUntilDue(now).compareTo(b.daysUntilDue(now));
+        return a.dueDate.compareTo(b.dueDate);
       });
-    for (final card in byPriority) {
+    for (final target in byPriority) {
       if (remaining <= 0.01) break;
-      final alreadyPaid = payments[card.id] ?? 0;
+      final alreadyPaid = payments[target.id] ?? 0;
       final extra = math
-          .min(
-            math.max(
-              0,
-              amountInDop(
-                    card.totalOwed,
-                    card.currency,
-                    exchangeRateDopPerUsd,
-                  ) -
-                  alreadyPaid,
-            ),
-            remaining,
-          )
+          .min(math.max(0, target.balanceDop - alreadyPaid), remaining)
           .toDouble();
-      payments[card.id] = alreadyPaid + extra;
+      payments[target.id] = alreadyPaid + extra;
       remaining -= extra;
     }
 
     final allocations = <PaymentAllocation>[];
-    for (final card in byDueDate) {
-      final total = payments[card.id] ?? 0;
+    for (final target in dueTargets) {
+      final total = payments[target.id] ?? 0;
       if (total <= 0.01) continue;
-      final minimum = math.min(total, minimums[card.id] ?? 0).toDouble();
+      final minimum = math.min(total, minimums[target.id] ?? 0).toDouble();
       final extra = math.max(0, total - minimum).toDouble();
-      final daysUntilDue = card.daysUntilDue(now);
-      final atRisk = minimum + 0.01 < (minimums[card.id] ?? 0);
+      final daysUntilDue = target.dueDate.difference(dateOnly(today)).inDays;
+      final atRisk = minimum + 0.01 < (minimums[target.id] ?? 0);
       final reason = atRisk
           ? 'Partial minimum'
           : extra > 0.01
-          ? 'Minimum covered + extra to ${card.apr.toStringAsFixed(1)}% APR'
+          ? 'Minimum covered + extra to ${target.apr.toStringAsFixed(1)}% APR'
           : 'Upcoming minimum';
       allocations.add(
         PaymentAllocation(
-          cardId: card.id,
-          cardName: card.name,
-          accentColor: card.accentColor,
-          dueDate: card.nextDueDate(now),
+          cardId: target.id,
+          cardName: target.name,
+          accentColor: target.accentColor,
+          dueDate: target.dueDate,
           daysUntilDue: daysUntilDue,
           minimumAmount: minimum,
           extraAmount: extra,
           reason: reason,
           isAtRisk: atRisk,
-          currency: card.currency,
-          exchangeRateDopPerUsd: exchangeRateDopPerUsd,
+          currency: target.currency,
+          exchangeRateDopPerUsd: exchangeRate,
+          isLoan: target.isLoan,
         ),
       );
     }
@@ -163,4 +203,26 @@ class PaymentPlanner {
       allocations: allocations,
     );
   }
+}
+
+class _DebtTarget {
+  const _DebtTarget({
+    required this.id,
+    required this.name,
+    required this.accentColor,
+    required this.dueDate,
+    required this.apr,
+    required this.currency,
+    required this.balanceDop,
+    required this.isLoan,
+  });
+
+  final String id;
+  final String name;
+  final int accentColor;
+  final DateTime dueDate;
+  final double apr;
+  final String currency;
+  final double balanceDop;
+  final bool isLoan;
 }

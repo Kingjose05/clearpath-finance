@@ -131,6 +131,7 @@ Future<int> runDailySyncIfDue({bool force = false}) async {
     final planner = const PaymentPlanner();
     final plan = planner.buildPlan(
       cards: store.data.cards,
+      loans: store.data.loans,
       paycheckAmount:
           store.data.latestPaycheck?.amount ?? store.data.totalMinimumDue,
     );

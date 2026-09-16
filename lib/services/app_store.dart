@@ -154,8 +154,15 @@ class AppStore {
         lastPaymentDate: now,
       );
     }).toList();
+    final loans = _data.loans.map((loan) {
+      final allocation = plan.allocationForLoan(loan.id);
+      if (allocation == null || allocation.totalAmount <= 0) return loan;
+      final paymentAmount = math.min(loan.balance, allocation.nativeAmount);
+      return loan.copyWith(balance: math.max(0, loan.balance - paymentAmount));
+    }).toList();
     _data = _data.copyWith(
       cards: cards,
+      loans: loans,
       payments: [...paymentRecords, ..._data.payments],
     );
     await save();

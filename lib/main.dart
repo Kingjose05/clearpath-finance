@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:convert';
 
 import 'package:background_fetch/background_fetch.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -17,6 +18,7 @@ import 'services/notification_service.dart';
 import 'services/outlook_auth_service.dart';
 import 'services/payment_planner.dart';
 import 'services/payoff_calendar.dart';
+import 'services/statement_ocr.dart';
 
 const _ink = Color(0xFF16232C);
 const _muted = Color(0xFF667784);
@@ -179,6 +181,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
 
   PaymentPlan get plan => widget.planner.buildPlan(
     cards: data.cards,
+    loans: data.loans,
     paycheckAmount: data.latestPaycheck?.amount ?? data.totalMinimumDue,
     exchangeRateDopPerUsd: data.settings.exchangeRateDopPerUsd,
   );
@@ -279,10 +282,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         data: data,
         plan: plan,
         onAddPaycheck: _showPaycheckSheet,
+        onSavePaycheck: _savePaycheckAmount,
         onApplyPlan: _applyCurrentPlan,
         onAddPurchase: () => _showPurchaseSheet(),
         onSyncEmail: _syncGmail,
         onCalibrate: _showCalibrationSheet,
+        onImportStatements: _showStatementImportSheet,
         syncing: _syncing,
       ),
       CardsView(
@@ -432,6 +437,19 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     _snack('Paycheck saved. Suggested payments updated.');
   }
 
+  Future<void> _savePaycheckAmount(double amount) async {
+    if (amount <= 0) return;
+    await widget.store.addPaycheck(
+      Paycheck(
+        id: newId('paycheck'),
+        amount: amount,
+        receivedAt: DateTime.now(),
+      ),
+    );
+    await _saveAndRefresh();
+    if (mounted) _snack('Paycheck saved. Payment split updated.');
+  }
+
   Future<void> _applyCurrentPlan() async {
     if (plan.allocations.isEmpty || plan.allocatedAmount <= 0) {
       _snack('No payment allocation is available yet.');
@@ -563,6 +581,309 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     await _saveAndRefresh();
     if (!mounted) return;
     _snack('Transaction added to ${selectedCard.name}.');
+  }
+
+  Future<void> _showStatementImportSheet() async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty || !mounted) return;
+
+    final ocr = const StatementOcrService();
+    final drafts = <StatementDraft>[];
+    for (final file in picked.files) {
+      String text = '';
+      try {
+        text = await ocr.extractText(file.path);
+      } catch (_) {
+        // Some platforms do not expose on-device OCR. The review step remains
+        // fully usable with the screenshot preview and manual confirmation.
+      }
+      drafts.add(
+        parseStatementText(
+          fileName: file.name,
+          text: text,
+          imageBytes: file.bytes,
+        ),
+      );
+    }
+
+    final candidates = <_StatementCandidate>[];
+    for (var index = 0; index < drafts.length; index++) {
+      final draft = drafts[index];
+      if (draft.hasDop || !draft.hasUsd) {
+        candidates.add(
+          _StatementCandidate.fromDraft(
+            index: index,
+            draft: draft,
+            currency: 'DOP',
+            existing: _matchingCard(draft.lastFour, 'DOP'),
+          ),
+        );
+      }
+      if (draft.hasUsd) {
+        candidates.add(
+          _StatementCandidate.fromDraft(
+            index: index,
+            draft: draft,
+            currency: 'USD',
+            existing: _matchingCard(draft.lastFour, 'USD'),
+          ),
+        );
+      }
+    }
+    if (candidates.isEmpty) return;
+    await _reviewStatementCandidates(candidates);
+  }
+
+  CreditCard? _matchingCard(String lastFour, String currency) {
+    if (lastFour.isEmpty) return null;
+    for (final card in data.cards) {
+      if (card.lastFour == lastFour && card.currency == currency) return card;
+    }
+    return null;
+  }
+
+  Future<void> _reviewStatementCandidates(
+    List<_StatementCandidate> candidates,
+  ) async {
+    final names = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(text: candidate.name),
+    };
+    final lastFours = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(text: candidate.lastFour),
+    };
+    final balances = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(
+          text: candidate.balance.toStringAsFixed(2),
+        ),
+    };
+    final minimums = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(
+          text: candidate.minimumDue.toStringAsFixed(2),
+        ),
+    };
+    final installmentBalances = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(
+          text: candidate.installmentBalance.toStringAsFixed(2),
+        ),
+    };
+    final installmentPayments = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(
+          text: candidate.installmentMonthlyPayment.toStringAsFixed(2),
+        ),
+    };
+    final cutoffs = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(text: '${candidate.cutoffDay}'),
+    };
+    final dues = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(text: '${candidate.dueDay}'),
+    };
+    final submitted = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+      ),
+      builder: (context) => _SheetFrame(
+        title: 'Review statement import',
+        children: [
+          const Text(
+            'OCR is a starting point. Confirm every value before saving. Each currency is kept as its own account, and cuotas stay separate from revolving debt.',
+            style: TextStyle(color: _muted),
+          ),
+          const SizedBox(height: 14),
+          for (final candidate in candidates) ...[
+            if (candidate.source.imageBytes != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.memory(
+                  candidate.source.imageBytes!,
+                  height: 150,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${candidate.source.fileName} · ${candidate.currency}',
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+                if (candidate.source.rawText.isNotEmpty)
+                  const _StatusChip(label: 'OCR read', color: _teal),
+              ],
+            ),
+            if (candidate.source.currentTotalDop != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 5),
+                child: Text(
+                  'Detected current total: ${_currencyMoney(candidate.source.currentTotalDop!, 'DOP')}. Revolving and cuota values below are kept separate.',
+                  style: const TextStyle(color: _muted, fontSize: 12),
+                ),
+              ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: names[candidate.key],
+                    decoration: const InputDecoration(
+                      labelText: 'Account name',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 105,
+                  child: TextField(
+                    controller: lastFours[candidate.key],
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Last four'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            _MoneyField(
+              controller: balances[candidate.key]!,
+              label: candidate.currency == 'USD'
+                  ? 'Statement balance (USD)'
+                  : 'Revolving balance (DOP)',
+            ),
+            const SizedBox(height: 10),
+            _MoneyField(
+              controller: minimums[candidate.key]!,
+              label: 'Minimum payment (${candidate.currency})',
+            ),
+            if (candidate.currency == 'DOP') ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: _MoneyField(
+                      controller: installmentBalances[candidate.key]!,
+                      label: 'Separate cuota balance',
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _MoneyField(
+                      controller: installmentPayments[candidate.key]!,
+                      label: 'Monthly cuota',
+                    ),
+                  ),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(
+                  'Leave cuota balance at the estimated amount if the statement only shows the monthly installment; it will not be added to revolving debt.',
+                  style: TextStyle(color: _muted, fontSize: 12),
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _NumberField(
+                    controller: cutoffs[candidate.key]!,
+                    label: 'Cutoff day',
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _NumberField(
+                    controller: dues[candidate.key]!,
+                    label: 'Due day',
+                  ),
+                ),
+              ],
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Divider(height: 1),
+            ),
+          ],
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.verified_outlined),
+            label: const Text('Save confirmed balances'),
+          ),
+        ],
+      ),
+    );
+    if (submitted != true) return;
+    for (final candidate in candidates) {
+      final existing = candidate.existing;
+      final balance = _parseMoney(balances[candidate.key]!.text);
+      await widget.store.upsertCard(
+        CreditCard(
+          id: existing?.id ?? newId('card'),
+          name: names[candidate.key]!.text.trim().isEmpty
+              ? candidate.name
+              : names[candidate.key]!.text.trim(),
+          lastFour: lastFours[candidate.key]!.text.trim(),
+          balance: balance,
+          creditLimit: existing?.creditLimit ?? math.max(balance, 1),
+          apr: existing?.apr ?? 0,
+          cutoffDay: _parseDay(cutoffs[candidate.key]!.text),
+          dueDay: _parseDay(dues[candidate.key]!.text),
+          minimumDue: _parseMoney(minimums[candidate.key]!.text),
+          accentColor: existing?.accentColor ?? _teal.toARGB32(),
+          lastPaymentDate: existing?.lastPaymentDate,
+          reminderDaysBefore:
+              existing?.reminderDaysBefore ??
+              data.settings.defaultReminderDaysBefore,
+          emailMatchTerms: existing?.emailMatchTerms ?? const [],
+          accountType: AccountType.credit,
+          currency: candidate.currency,
+          installmentBalance: candidate.currency == 'DOP'
+              ? _parseMoney(installmentBalances[candidate.key]!.text)
+              : 0,
+          installmentMonthlyPayment: candidate.currency == 'DOP'
+              ? _parseMoney(installmentPayments[candidate.key]!.text)
+              : 0,
+          calibratedCutoffDate: candidate.source.cutoffDate,
+          calibratedDueDate: candidate.source.dueDate,
+          needsReview: false,
+        ),
+      );
+    }
+    await widget.store.updateSettings(
+      widget.store.data.settings.copyWith(lastCalibrationAt: DateTime.now()),
+    );
+    await _saveAndRefresh();
+    if (mounted) {
+      _snack('Statement values saved. Future email updates start here.');
+    }
+    for (final controller in [
+      ...names.values,
+      ...lastFours.values,
+      ...balances.values,
+      ...minimums.values,
+      ...installmentBalances.values,
+      ...installmentPayments.values,
+      ...cutoffs.values,
+      ...dues.values,
+    ]) {
+      controller.dispose();
+    }
   }
 
   Future<void> _showCalibrationSheet() async {
@@ -1047,6 +1368,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     final reminder = TextEditingController(
       text: (loan?.reminderDaysBefore ?? 3).toString(),
     );
+    var currency = loan?.currency ?? 'DOP';
     final submitted = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -1064,6 +1386,19 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           ),
           const SizedBox(height: 12),
           _MoneyField(controller: balance, label: 'Balance owed'),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: currency,
+            decoration: const InputDecoration(labelText: 'Currency'),
+            items: const [
+              DropdownMenuItem(
+                value: 'DOP',
+                child: Text('DOP · Dominican pesos'),
+              ),
+              DropdownMenuItem(value: 'USD', child: Text('USD · US dollars')),
+            ],
+            onChanged: (value) => currency = value ?? 'DOP',
+          ),
           const SizedBox(height: 12),
           Row(
             children: [
@@ -1113,6 +1448,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         minimumPayment: _parseMoney(minimum.text),
         dueDay: _parseDay(dueDay.text),
         reminderDaysBefore: math.max(0, int.tryParse(reminder.text) ?? 3),
+        currency: currency,
       ),
     );
     await _saveAndRefresh();
@@ -1618,20 +1954,24 @@ class DashboardView extends StatelessWidget {
     required this.data,
     required this.plan,
     required this.onAddPaycheck,
+    required this.onSavePaycheck,
     required this.onApplyPlan,
     required this.onAddPurchase,
     required this.onSyncEmail,
     required this.onCalibrate,
+    required this.onImportStatements,
     required this.syncing,
   });
 
   final DebtAppData data;
   final PaymentPlan plan;
   final VoidCallback onAddPaycheck;
+  final ValueChanged<double> onSavePaycheck;
   final VoidCallback onApplyPlan;
   final VoidCallback onAddPurchase;
   final VoidCallback onSyncEmail;
   final VoidCallback onCalibrate;
+  final VoidCallback onImportStatements;
   final bool syncing;
 
   @override
@@ -1653,6 +1993,12 @@ class DashboardView extends StatelessWidget {
           onSyncEmail: onSyncEmail,
           syncing: syncing,
         ),
+        const SizedBox(height: 12),
+        _PaymentSplitCalculator(
+          data: data,
+          plan: plan,
+          onSavePaycheck: onSavePaycheck,
+        ),
         if (data.cards.isNotEmpty &&
             (data.settings.lastCalibrationAt == null ||
                 data.cards.any((account) => account.needsReview))) ...[
@@ -1663,6 +2009,12 @@ class DashboardView extends StatelessWidget {
             label: const Text('Calibrate balances and dates'),
           ),
         ],
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: onImportStatements,
+          icon: const Icon(Icons.document_scanner_outlined),
+          label: const Text('Import statement screenshots'),
+        ),
         const SizedBox(height: 18),
         _SectionHeader(
           title: 'Pay today',
@@ -1698,6 +2050,164 @@ class DashboardView extends StatelessWidget {
         const SizedBox(height: 8),
         _PurchaseList(data: data, purchases: data.recentPurchases(limit: 5)),
       ],
+    );
+  }
+}
+
+class _PaymentSplitCalculator extends StatefulWidget {
+  const _PaymentSplitCalculator({
+    required this.data,
+    required this.plan,
+    required this.onSavePaycheck,
+  });
+
+  final DebtAppData data;
+  final PaymentPlan plan;
+  final ValueChanged<double> onSavePaycheck;
+
+  @override
+  State<_PaymentSplitCalculator> createState() =>
+      _PaymentSplitCalculatorState();
+}
+
+class _PaymentSplitCalculatorState extends State<_PaymentSplitCalculator> {
+  late final TextEditingController _amount;
+
+  @override
+  void initState() {
+    super.initState();
+    _amount = TextEditingController(
+      text: widget.plan.paycheckAmount > 0
+          ? widget.plan.paycheckAmount.toStringAsFixed(2)
+          : '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final entered = _parseMoney(_amount.text);
+    final preview = const PaymentPlanner().buildPlan(
+      cards: widget.data.cards,
+      loans: widget.data.loans,
+      paycheckAmount: entered,
+      exchangeRateDopPerUsd: widget.data.settings.exchangeRateDopPerUsd,
+    );
+    return _Panel(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.call_split_outlined, color: _teal),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Split a paycheck',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+                  ),
+                ),
+                Text(
+                  '${preview.allocations.length} targets',
+                  style: const TextStyle(color: _muted, fontSize: 12),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Minimums and overdue amounts first, then the highest APR debt. USD is converted using your saved rate.',
+              style: TextStyle(color: _muted, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: _MoneyField(
+                    controller: _amount,
+                    label: 'Paycheck available (DOP)',
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                FilledButton(
+                  onPressed: entered <= 0
+                      ? null
+                      : () => widget.onSavePaycheck(entered),
+                  child: const Text('Calculate'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _SplitSummary(
+                    label: 'Minimums first',
+                    value: _money.format(preview.requiredMinimums),
+                    color: preview.coversMinimums ? _teal : _coral,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _SplitSummary(
+                    label: preview.coversMinimums
+                        ? 'Extra avalanche'
+                        : 'Shortfall',
+                    value: _money.format(
+                      preview.coversMinimums
+                          ? preview.unallocatedAmount
+                          : preview.shortfall,
+                    ),
+                    color: preview.coversMinimums ? _green : _coral,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SplitSummary extends StatelessWidget {
+  const _SplitSummary({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: _muted, fontSize: 11)),
+          const SizedBox(height: 3),
+          Text(
+            value,
+            style: TextStyle(color: color, fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1958,7 +2468,7 @@ class _PaymentAllocationRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  allocation.cardName,
+                  '${allocation.cardName}${allocation.isLoan ? ' · Loan' : ''}',
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 3),
@@ -1982,8 +2492,15 @@ class _PaymentAllocationRow extends StatelessWidget {
                   fontSize: 16,
                 ),
               ),
+              if (allocation.currency == 'USD')
+                Text(
+                  'US\$${allocation.nativeAmount.toStringAsFixed(2)}',
+                  style: const TextStyle(color: _muted, fontSize: 11),
+                ),
               Text(
-                '${allocation.daysUntilDue}d left',
+                allocation.daysUntilDue < 0
+                    ? '${allocation.daysUntilDue.abs()}d overdue'
+                    : '${allocation.daysUntilDue}d left',
                 style: TextStyle(
                   color: allocation.daysUntilDue <= 3 ? _coral : _muted,
                   fontSize: 12,
@@ -2437,7 +2954,7 @@ class _LoanPanel extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
                     Text(
-                      '${loan.apr.toStringAsFixed(1)}% APR · due day ${loan.dueDay}',
+                      '${loan.apr.toStringAsFixed(1)}% APR · ${loan.currency} · due day ${loan.dueDay}',
                       style: const TextStyle(color: _muted, fontSize: 12),
                     ),
                   ],
@@ -2447,11 +2964,11 @@ class _LoanPanel extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    _money.format(loan.balance),
+                    _currencyMoney(loan.balance, loan.currency),
                     style: const TextStyle(fontWeight: FontWeight.w900),
                   ),
                   Text(
-                    '${_money.format(loan.minimumPayment)}/mo',
+                    '${_currencyMoney(loan.minimumPayment, loan.currency)}/mo',
                     style: const TextStyle(color: _muted, fontSize: 12),
                   ),
                 ],
@@ -3693,15 +4210,21 @@ class _SheetFrame extends StatelessWidget {
 }
 
 class _MoneyField extends StatelessWidget {
-  const _MoneyField({required this.controller, required this.label});
+  const _MoneyField({
+    required this.controller,
+    required this.label,
+    this.onChanged,
+  });
 
   final TextEditingController controller;
   final String label;
+  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
+      onChanged: onChanged,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       decoration: InputDecoration(labelText: label, prefixText: '\$ '),
     );
@@ -3827,4 +4350,82 @@ String _compactMoney(double value) {
   if (value >= 1000000) return 'RD\$${(value / 1000000).toStringAsFixed(1)}m';
   if (value >= 1000) return 'RD\$${(value / 1000).toStringAsFixed(0)}k';
   return 'RD\$${value.toStringAsFixed(0)}';
+}
+
+class _StatementCandidate {
+  _StatementCandidate({
+    required this.index,
+    required this.source,
+    required this.currency,
+    required this.name,
+    required this.lastFour,
+    required this.balance,
+    required this.minimumDue,
+    required this.installmentBalance,
+    required this.installmentMonthlyPayment,
+    required this.cutoffDay,
+    required this.dueDay,
+    required this.existing,
+  });
+
+  factory _StatementCandidate.fromDraft({
+    required int index,
+    required StatementDraft draft,
+    required String currency,
+    required CreditCard? existing,
+  }) {
+    final statementBalance = currency == 'USD'
+        ? draft.statementBalanceUsd
+        : draft.statementBalanceDop;
+    final minimum = currency == 'USD'
+        ? draft.minimumDueUsd
+        : draft.minimumDueDop;
+    final currentTotal = draft.currentTotalDop;
+    final monthlyCuota = currency == 'DOP'
+        ? draft.installmentMonthlyPayment ??
+              existing?.installmentMonthlyPayment ??
+              0
+        : 0;
+    final estimatedInstallmentBalance =
+        currency == 'DOP' &&
+            draft.installmentBalance == null &&
+            monthlyCuota > 0 &&
+            currentTotal != null &&
+            draft.statementBalanceDop != null
+        ? math.max(0, currentTotal - draft.statementBalanceDop!)
+        : draft.installmentBalance ?? existing?.installmentBalance ?? 0;
+    return _StatementCandidate(
+      index: index,
+      source: draft,
+      currency: currency,
+      name:
+          existing?.name ??
+          '${draft.bankName.isEmpty ? 'Imported card' : draft.bankName} $currency',
+      lastFour: draft.lastFour.isEmpty
+          ? existing?.lastFour ?? ''
+          : draft.lastFour,
+      balance: statementBalance ?? currentTotal ?? existing?.balance ?? 0,
+      minimumDue: minimum ?? existing?.minimumDue ?? 0,
+      installmentBalance: estimatedInstallmentBalance.toDouble(),
+      installmentMonthlyPayment: monthlyCuota.toDouble(),
+      cutoffDay: draft.cutoffDate?.day ?? existing?.cutoffDay ?? 1,
+      dueDay: draft.dueDate?.day ?? existing?.dueDay ?? 1,
+      existing: existing,
+    );
+  }
+
+  final int index;
+  final StatementDraft source;
+  final String currency;
+  final String name;
+  final String lastFour;
+  final double balance;
+  final double minimumDue;
+  final double installmentBalance;
+  final double installmentMonthlyPayment;
+  final int cutoffDay;
+  final int dueDay;
+  final CreditCard? existing;
+
+  String get key => '$index-$currency';
 }

@@ -94,10 +94,8 @@ PayoffSchedule buildPayoffSchedule({
         balanceDop: amountInDop(card.totalOwed, card.currency, exchangeRate),
         apr: math.max(0, card.apr).toDouble(),
         minimumDop: amountInDop(
-          math.min(
-            card.totalOwed,
-            card.minimumDue + card.installmentMonthlyPayment,
-          ),
+          math.min(card.minimumDue, card.balance) +
+              math.min(card.installmentMonthlyPayment, card.installmentBalance),
           card.currency,
           exchangeRate,
         ),
@@ -108,11 +106,15 @@ PayoffSchedule buildPayoffSchedule({
       _DebtState(
         id: loan.id,
         name: loan.name,
-        balanceDop: loan.balance,
+        balanceDop: amountInDop(loan.balance, loan.currency, exchangeRate),
         apr: math.max(0, loan.apr).toDouble(),
-        minimumDop: math.min(loan.balance, loan.minimumPayment).toDouble(),
+        minimumDop: amountInDop(
+          math.min(loan.balance, loan.minimumPayment),
+          loan.currency,
+          exchangeRate,
+        ),
         dueDay: loan.dueDay,
-        currency: 'DOP',
+        currency: loan.currency,
       ),
   ];
   final budget = math.max(0, monthlyBudgetDop).toDouble();
