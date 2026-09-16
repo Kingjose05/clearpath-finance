@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:background_fetch/background_fetch.dart';
 import 'package:file_picker/file_picker.dart';
@@ -591,17 +592,24 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     final drafts = <StatementDraft>[];
     for (final file in picked) {
       String text = '';
+      Uint8List? imageBytes;
       try {
         text = await ocr.extractText(file.path);
       } catch (_) {
         // Some platforms do not expose on-device OCR. The review step remains
         // fully usable with the screenshot preview and manual confirmation.
       }
+      try {
+        imageBytes = await file.readAsBytes();
+      } catch (_) {
+        // A platform may expose a path but deny a second read; OCR/manual
+        // review can still proceed without an inline preview.
+      }
       drafts.add(
         parseStatementText(
           fileName: file.name,
           text: text,
-          imageBytes: file.bytes,
+          imageBytes: imageBytes,
         ),
       );
     }
