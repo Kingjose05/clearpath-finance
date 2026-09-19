@@ -57,6 +57,54 @@ class StatementDraft {
       statementBalanceUsd != null ||
       minimumDueUsd != null ||
       availableBalanceUsd != null;
+
+  factory StatementDraft.fromVision({
+    required String fileName,
+    required Map<String, dynamic> values,
+    Uint8List? imageBytes,
+  }) {
+    double? number(String key) {
+      final value = values[key];
+      if (value is num) return value.toDouble();
+      if (value is String) {
+        return double.tryParse(value.replaceAll(',', '').trim());
+      }
+      return null;
+    }
+
+    DateTime? date(String key) {
+      final value = values[key];
+      return value is String && value.isNotEmpty
+          ? DateTime.tryParse(value)
+          : null;
+    }
+
+    return StatementDraft(
+      fileName: fileName,
+      rawText: values['rawText'] is String ? values['rawText'] as String : '',
+      imageBytes: imageBytes,
+      bankName: values['bankName'] is String
+          ? values['bankName'] as String
+          : '',
+      lastFour: values['lastFour'] is String
+          ? values['lastFour'] as String
+          : '',
+      accountType: values['accountType'] == 'debit'
+          ? AccountType.debit
+          : AccountType.credit,
+      availableBalanceDop: number('availableBalanceDop'),
+      availableBalanceUsd: number('availableBalanceUsd'),
+      currentTotalDop: number('currentTotalDop'),
+      statementBalanceDop: number('statementBalanceDop'),
+      minimumDueDop: number('minimumDueDop'),
+      statementBalanceUsd: number('statementBalanceUsd'),
+      minimumDueUsd: number('minimumDueUsd'),
+      installmentBalance: number('installmentBalance'),
+      installmentMonthlyPayment: number('installmentMonthlyPayment'),
+      cutoffDate: date('cutoffDate'),
+      dueDate: date('dueDate'),
+    );
+  }
 }
 
 class StatementOcrService {

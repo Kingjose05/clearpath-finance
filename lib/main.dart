@@ -20,6 +20,7 @@ import 'services/outlook_auth_service.dart';
 import 'services/payment_planner.dart';
 import 'services/payoff_calendar.dart';
 import 'services/statement_ocr.dart';
+import 'services/statement_vision.dart';
 
 const _ink = Color(0xFF16232C);
 const _muted = Color(0xFF667784);
@@ -728,6 +729,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     if (picked.isEmpty || !mounted) return;
 
     final ocr = const StatementOcrService();
+    final vision = const StatementVisionService();
     final drafts = <StatementDraft>[];
     var unreadableImages = 0;
     for (final file in picked) {
@@ -739,18 +741,32 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         // A platform may expose a path but deny a second read; OCR/manual
         // review can still proceed without an inline preview.
       }
+      StatementDraft? visionDraft;
       try {
-        text = await ocr.extractText(file.path, imageBytes: imageBytes);
+        if (imageBytes != null && imageBytes.isNotEmpty) {
+          visionDraft = await vision.analyze(
+            fileName: file.name,
+            imageBytes: imageBytes,
+          );
+        }
+      } catch (_) {
+        // Browser OCR remains a useful no-network fallback.
+      }
+      try {
+        if (visionDraft == null) {
+          text = await ocr.extractText(file.path, imageBytes: imageBytes);
+        }
       } catch (_) {
         // The editable review step remains available when recognition fails.
       }
-      if (text.trim().isEmpty) unreadableImages++;
+      if (visionDraft == null && text.trim().isEmpty) unreadableImages++;
       drafts.add(
-        parseStatementText(
-          fileName: file.name,
-          text: text,
-          imageBytes: imageBytes,
-        ),
+        visionDraft ??
+            parseStatementText(
+              fileName: file.name,
+              text: text,
+              imageBytes: imageBytes,
+            ),
       );
     }
 
