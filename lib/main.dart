@@ -593,16 +593,15 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       String text = '';
       Uint8List? imageBytes;
       try {
-        text = await ocr.extractText(file.path);
-      } catch (_) {
-        // Some platforms do not expose on-device OCR. The review step remains
-        // fully usable with the screenshot preview and manual confirmation.
-      }
-      try {
         imageBytes = await file.readAsBytes();
       } catch (_) {
         // A platform may expose a path but deny a second read; OCR/manual
         // review can still proceed without an inline preview.
+      }
+      try {
+        text = await ocr.extractText(file.path, imageBytes: imageBytes);
+      } catch (_) {
+        // The editable review step remains available when recognition fails.
       }
       drafts.add(
         parseStatementText(

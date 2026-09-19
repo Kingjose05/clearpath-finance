@@ -3,7 +3,8 @@
 import 'dart:typed_data';
 
 import 'statement_ocr_platform.dart'
-    if (dart.library.io) 'statement_ocr_native.dart';
+    if (dart.library.io) 'statement_ocr_native.dart'
+    if (dart.library.js_interop) 'statement_ocr_web.dart';
 
 import '../models.dart';
 
@@ -61,7 +62,8 @@ class StatementDraft {
 class StatementOcrService {
   const StatementOcrService();
 
-  Future<String> extractText(String? path) => extractStatementText(path);
+  Future<String> extractText(String? path, {Uint8List? imageBytes}) =>
+      extractStatementText(path, imageBytes: imageBytes);
 }
 
 StatementDraft parseStatementText({
@@ -85,6 +87,9 @@ StatementDraft parseStatementText({
             '';
   final lastFour = _lastFour(normalized);
   final currentTotalDop = _amountAfter(normalized, [
+    'balance total',
+    'saldo a la fecha',
+    'balance a la fecha',
     'current total',
     'total actual',
     'saldo actual',
@@ -100,6 +105,7 @@ StatementDraft parseStatementText({
     'saldo actual',
   ]);
   final statementBalanceDop = _amountAfter(normalized, [
+    'balance al corte',
     'statement balance',
     'saldo al corte',
     'balance al corte',
@@ -188,6 +194,13 @@ String _lastFour(String text) {
     caseSensitive: false,
   ).firstMatch(text);
   if (labeled != null) return labeled.group(1)!;
+  final masked = RegExp(r'(?:[•*xX.]\s*){3,}(\d{4})(?!\d)').firstMatch(text);
+  if (masked != null) return masked.group(1)!;
+  final dash = RegExp(
+    r'(?:visa|mastercard|amex|pesos|dolares)[^\n]{0,40}?[-–]\s*(\d{4})(?!\d)',
+    caseSensitive: false,
+  ).firstMatch(text);
+  if (dash != null) return dash.group(1)!;
   return '';
 }
 
