@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:background_fetch/background_fetch.dart';
 import 'package:file_picker/file_picker.dart';
@@ -286,7 +285,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         onSavePaycheck: _savePaycheckAmount,
         onApplyPlan: _applyCurrentPlan,
         onAddPurchase: () => _showPurchaseSheet(),
-        onSyncEmail: _syncGmail,
+        onSyncEmail: _syncEmail,
         onCalibrate: _showCalibrationSheet,
         onImportStatements: _showStatementImportSheet,
         syncing: _syncing,
@@ -313,8 +312,8 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         onTestNotification: _testNotification,
         onBackgroundEmailSyncChanged: _setBackgroundEmailSyncEnabled,
         onConnectEmail: _showEmailProviderSheet,
-        onEmailSync: _syncGmail,
-        onImportEmail: _importGmail,
+        onEmailSync: _syncEmail,
+        onImportEmail: _importEmail,
         onRunBackgroundSyncNow: _runBackgroundSyncNow,
         onDisconnectEmail: _disconnectEmail,
         onResetData: _resetData,
@@ -586,7 +585,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
 
   Future<void> _showStatementImportSheet() async {
     final picked = await FilePicker.pickFiles(type: FileType.image);
-    if (picked == null || picked.isEmpty || !mounted) return;
+    if (picked.isEmpty || !mounted) return;
 
     final ocr = const StatementOcrService();
     final drafts = <StatementDraft>[];
@@ -638,7 +637,20 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         );
       }
     }
-    if (candidates.isEmpty) return;
+    if (candidates.isEmpty) {
+      // Web browsers do not expose native OCR. Still open a usable review form
+      // for every chosen screenshot instead of silently doing nothing.
+      for (var index = 0; index < drafts.length; index++) {
+        candidates.add(
+          _StatementCandidate.fromDraft(
+            index: index,
+            draft: drafts[index],
+            currency: 'DOP',
+            existing: null,
+          ),
+        );
+      }
+    }
     await _reviewStatementCandidates(candidates);
   }
 
@@ -1867,6 +1879,73 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     } catch (error) {
       if (!mounted) return;
       _snack('Gmail sync failed: $error');
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  Future<void> _syncEmail() async {
+    if (data.settings.connectedEmailProvider == EmailProvider.outlook) {
+      await _syncOutlook(since: _incrementalSyncStart());
+      return;
+    }
+    await _syncGmail();
+  }
+
+  Future<void> _importEmail() async {
+    if (data.settings.connectedEmailProvider != EmailProvider.outlook) {
+      await _importGmail();
+      return;
+    }
+    final today = DateTime.now();
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: today,
+      initialDateRange: DateTimeRange(
+        start: today.subtract(const Duration(days: 30)),
+        end: today,
+      ),
+      helpText: 'Choose Outlook transaction date range',
+    );
+    if (range == null) return;
+    await _syncOutlook(
+      since: range.start,
+      until: range.end.add(const Duration(days: 1)),
+    );
+  }
+
+  Future<void> _syncOutlook({DateTime? since, DateTime? until}) async {
+    if (_syncing) return;
+    setState(() => _syncing = true);
+    try {
+      final previousCount = data.purchases.length;
+      final result = await _outlookAuth.syncRecentPurchases(
+        data.cards,
+        since: since,
+        until: until,
+        excludedMessageIds: data.purchases
+            .map((item) => item.sourceMessageId)
+            .whereType<String>()
+            .toSet(),
+      );
+      await _saveEmailBatch(result);
+      final imported = data.purchases.length - previousCount;
+      await widget.store.updateSettings(
+        data.settings.copyWith(
+          emailSyncEnabled: true,
+          connectedEmailProvider: EmailProvider.outlook,
+          connectedEmail: result.accountEmail,
+          lastEmailSyncAt: DateTime.now(),
+          lastEmailSyncStatus: imported == 0
+              ? result.message
+              : '$imported transactions imported',
+        ),
+      );
+      await _saveAndRefresh();
+      if (mounted) _snack(result.message);
+    } catch (error) {
+      if (mounted) _snack('Outlook import failed: $error');
     } finally {
       if (mounted) setState(() => _syncing = false);
     }

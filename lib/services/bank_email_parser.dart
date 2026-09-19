@@ -541,3 +541,121 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
   }
   return result;
 }
+
+/// Parses plain text returned by Microsoft Graph. HTML/table parsing remains in
+/// [parseBankTransactions] for Gmail, while this covers standard alert emails.
+List<BankTransaction> parseBankEmailText({
+  required String sender,
+  required String subject,
+  required String text,
+  required DateTime fallback,
+}) {
+  final normalized = _normalize('$subject $text');
+  final bank = _bankName(sender, normalized);
+  final lastFour = _cardNumber(text.replaceAll('\n', ' '));
+  if (bank.isEmpty ||
+      lastFour == null ||
+      !RegExp(
+        r'notificacion|notification|transaccion|transaction|consumo|purchase|retiro|withdrawal|pago|payment|deposito|deposit|transferencia|transfer|abono',
+      ).hasMatch(normalized)) {
+    return [];
+  }
+  final amountText = _firstField(const {}, text, const [
+    'monto',
+    'valor',
+    'importe',
+    'debito',
+    'credito',
+    'amount',
+  ]);
+  final amount = parseBankAmount(amountText) ?? _amountFromAlert(text);
+  if (amount == null || amount <= 0) return [];
+  final kind = RegExp(r'retiro|cajero|\batm\b').hasMatch(normalized)
+      ? TransactionKind.withdrawal
+      : RegExp(
+          r'pago (?:a |de )?(?:la )?tarjeta|abono (?:a |de )?(?:la )?tarjeta',
+        ).hasMatch(normalized)
+      ? TransactionKind.cardPayment
+      : RegExp(r'nomina|salario|deposito de sueldo').hasMatch(normalized)
+      ? TransactionKind.income
+      : RegExp(
+          r'transferencia recibida|transferencia entrante|abono recibido|incoming transfer|ach credit',
+        ).hasMatch(normalized)
+      ? TransactionKind.transferIn
+      : RegExp(
+          r'transferencia enviada|transferencia saliente|outgoing transfer|ach debit',
+        ).hasMatch(normalized)
+      ? TransactionKind.transferOut
+      : RegExp(r'reembolso|devolucion|refund').hasMatch(normalized)
+      ? TransactionKind.refund
+      : TransactionKind.purchase;
+  final debit =
+      RegExp(
+        r'tarjeta (?:de )?debito|debit card|cuenta de ahorro|cuenta corriente|checking|savings',
+      ).hasMatch(normalized) ||
+      kind == TransactionKind.income ||
+      kind == TransactionKind.transferIn ||
+      kind == TransactionKind.transferOut;
+  final merchant =
+      _firstField(const {}, text, const [
+        'comercio',
+        'merchant',
+        'descripcion',
+        'concepto',
+        'detalle',
+        'beneficiario',
+      ]).isNotEmpty
+      ? _firstField(const {}, text, const [
+          'comercio',
+          'merchant',
+          'descripcion',
+          'concepto',
+          'detalle',
+          'beneficiario',
+        ])
+      : kind == TransactionKind.withdrawal
+      ? 'Cash withdrawal'
+      : kind == TransactionKind.cardPayment
+      ? 'Card payment'
+      : kind == TransactionKind.transferIn
+      ? 'Incoming transfer'
+      : kind == TransactionKind.transferOut
+      ? 'Outgoing transfer'
+      : subject;
+  final currency = RegExp(r'\b(?:usd|us\$|dolar)').hasMatch(normalized)
+      ? 'USD'
+      : 'DOP';
+  return [
+    BankTransaction(
+      lastFour: lastFour,
+      bank: bank,
+      amount: amount,
+      currency: currency,
+      merchant: merchant,
+      date: fallback,
+      accountType: debit ? AccountType.debit : AccountType.credit,
+      needsReview: !RegExp(
+        r'tarjeta (?:de )?debito|debit card|tarjeta (?:de )?credito|credit card',
+      ).hasMatch(normalized),
+      kind: kind,
+      category: kind == TransactionKind.withdrawal
+          ? SpendingCategory.cash
+          : kind == TransactionKind.income
+          ? SpendingCategory.income
+          : kind == TransactionKind.transferIn ||
+                kind == TransactionKind.transferOut
+          ? SpendingCategory.transfers
+          : kind == TransactionKind.cardPayment
+          ? SpendingCategory.payments
+          : categorizeMerchant(merchant),
+    ),
+  ];
+}
+
+double? _amountFromAlert(String text) {
+  final match = RegExp(
+    r'(?:RD\$|DOP|US\$|USD|\$)\s*([\d.,]+)',
+    caseSensitive: false,
+  ).firstMatch(text);
+  return match == null ? null : parseBankAmount(match.group(1)!);
+}

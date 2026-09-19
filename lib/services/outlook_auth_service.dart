@@ -6,6 +6,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+import '../models.dart';
+import 'app_store.dart';
+import 'bank_email_parser.dart';
+import 'email_sync_service.dart';
 import 'oauth_popup.dart';
 
 class OutlookAuthException implements Exception {
@@ -127,6 +131,135 @@ class OutlookAuthService {
     }
     return email;
   }
+
+  Future<EmailSyncResult> syncRecentPurchases(
+    List<CreditCard> cards, {
+    DateTime? since,
+    DateTime? until,
+    Set<String> excludedMessageIds = const {},
+  }) async {
+    final token = await _storage.read(key: _tokenKey, iOptions: _ios);
+    final rawExpiry = await _storage.read(key: _expiryKey, iOptions: _ios);
+    final expiry = rawExpiry == null ? null : DateTime.tryParse(rawExpiry);
+    if (token == null ||
+        token.isEmpty ||
+        expiry == null ||
+        expiry.isBefore(DateTime.now().add(const Duration(minutes: 2)))) {
+      throw const OutlookAuthException(
+        'Outlook access expired. Connect Outlook again, then import.',
+      );
+    }
+    final query = <String, String>{
+      r'$top': '100',
+      r'$select': 'id,subject,from,receivedDateTime,body',
+      r'$orderby': 'receivedDateTime desc',
+    };
+    if (since != null) {
+      query[r'$filter'] =
+          'receivedDateTime ge ${since.toUtc().toIso8601String()}';
+    }
+    final response = await http.get(
+      Uri.https('graph.microsoft.com', '/v1.0/me/messages', query),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Prefer': 'outlook.body-content-type="text"',
+      },
+    );
+    final payload = _body(response);
+    if (response.statusCode != 200) {
+      throw OutlookAuthException(
+        payload['error']?['message']?.toString() ??
+            'Outlook could not read messages.',
+      );
+    }
+    final knownCards = [...cards];
+    final discovered = <String, CreditCard>{};
+    final purchases = <Purchase>[];
+    for (final raw in (payload['value'] as List? ?? const [])) {
+      final message = Map<String, dynamic>.from(raw as Map);
+      final id = message['id']?.toString();
+      if (id == null || excludedMessageIds.contains(id)) continue;
+      final received =
+          DateTime.tryParse(message['receivedDateTime']?.toString() ?? '') ??
+          DateTime.now();
+      if (until != null && received.isAfter(until)) continue;
+      final sender =
+          ((message['from'] as Map?)?['emailAddress'] as Map?)?['address']
+              ?.toString() ??
+          '';
+      final subject = message['subject']?.toString() ?? '';
+      final body = ((message['body'] as Map?)?['content']?.toString() ?? '');
+      final transactions = parseBankEmailText(
+        sender: sender,
+        subject: subject,
+        text: body,
+        fallback: received,
+      );
+      for (final transaction in transactions) {
+        final card =
+            _matchingCard(knownCards, transaction) ?? _newCard(transaction);
+        if (!knownCards.any((item) => item.id == card.id)) {
+          knownCards.add(card);
+          discovered[card.id] = card;
+        }
+        purchases.add(
+          Purchase(
+            id: newId('outlook'),
+            cardId: card.id,
+            merchant: transaction.merchant,
+            amount: transaction.amount,
+            purchasedAt: transaction.date,
+            source: PurchaseSource.email,
+            subject: subject,
+            sourceMessageId: id,
+            kind: transaction.kind,
+            category: transaction.category,
+            currency: transaction.currency,
+          ),
+        );
+      }
+    }
+    final email = await _storage.read(key: _emailKey, iOptions: _ios);
+    return EmailSyncResult(
+      accountEmail: email,
+      purchases: purchases,
+      discoveredCards: discovered.values.toList(),
+      message:
+          '${discovered.length} account${discovered.length == 1 ? '' : 's'} found, ${purchases.length} transaction${purchases.length == 1 ? '' : 's'} imported from Outlook',
+    );
+  }
+
+  CreditCard? _matchingCard(
+    List<CreditCard> cards,
+    BankTransaction transaction,
+  ) {
+    for (final card in cards) {
+      if (card.lastFour == transaction.lastFour &&
+          card.currency == transaction.currency &&
+          card.accountType == transaction.accountType) {
+        return card;
+      }
+    }
+    return null;
+  }
+
+  CreditCard _newCard(BankTransaction transaction) => CreditCard(
+    id: 'card-outlook-${transaction.accountType.name}-${transaction.currency.toLowerCase()}-${transaction.lastFour}',
+    name:
+        '${transaction.bank} ${transaction.accountType == AccountType.debit ? 'Debit' : 'Credit'} ${transaction.currency} •${transaction.lastFour}',
+    lastFour: transaction.lastFour,
+    balance: 0,
+    creditLimit: 0,
+    apr: 0,
+    cutoffDay: 1,
+    dueDay: 1,
+    minimumDue: 0,
+    accentColor: 0xFF087E73,
+    emailMatchTerms: [transaction.lastFour],
+    accountType: transaction.accountType,
+    currency: transaction.currency,
+    needsReview: true,
+  );
 
   static String _random(int length) {
     const chars =
