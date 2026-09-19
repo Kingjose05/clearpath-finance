@@ -39,9 +39,14 @@
   <script>
     async function clearPathExtractStatementText(bytes) {
       if (!window.Tesseract) throw new Error("Text recognition is unavailable.");
-      const image = new Blob([bytes], { type: "image/*" });
-      const result = await window.Tesseract.recognize(image, "spa+eng");
-      return result && result.data ? result.data.text || "" : "";
+      const image = new Blob([bytes], { type: "image/png" });
+      const worker = await window.Tesseract.createWorker("eng");
+      try {
+        const result = await worker.recognize(image);
+        return result && result.data ? result.data.text || "" : "";
+      } finally {
+        await worker.terminate();
+      }
     }
   </script>
 </head>

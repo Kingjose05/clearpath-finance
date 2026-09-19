@@ -589,6 +589,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
 
     final ocr = const StatementOcrService();
     final drafts = <StatementDraft>[];
+    var unreadableImages = 0;
     for (final file in picked) {
       String text = '';
       Uint8List? imageBytes;
@@ -603,6 +604,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       } catch (_) {
         // The editable review step remains available when recognition fails.
       }
+      if (text.trim().isEmpty) unreadableImages++;
       drafts.add(
         parseStatementText(
           fileName: file.name,
@@ -649,6 +651,11 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           ),
         );
       }
+    }
+    if (unreadableImages > 0 && mounted) {
+      _snack(
+        'Text recognition could not read $unreadableImages image${unreadableImages == 1 ? '' : 's'}. Check the image is sharp, then enter the visible values in the review form.',
+      );
     }
     await _reviewStatementCandidates(candidates);
   }
