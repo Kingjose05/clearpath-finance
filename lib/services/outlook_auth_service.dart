@@ -36,6 +36,16 @@ class OutlookAuthService {
   );
   final FlutterSecureStorage _storage;
 
+  Future<bool> hasAccess() async {
+    final token = await _storage.read(key: _tokenKey, iOptions: _ios);
+    final rawExpiry = await _storage.read(key: _expiryKey, iOptions: _ios);
+    final expiry = rawExpiry == null ? null : DateTime.tryParse(rawExpiry);
+    return token != null &&
+        token.isNotEmpty &&
+        expiry != null &&
+        expiry.isAfter(DateTime.now().add(const Duration(minutes: 2)));
+  }
+
   Future<String?> connect() async {
     if (!kIsWeb) {
       throw const OutlookAuthException(

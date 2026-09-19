@@ -1885,7 +1885,8 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   }
 
   Future<void> _syncEmail() async {
-    if (data.settings.connectedEmailProvider == EmailProvider.outlook) {
+    if (data.settings.connectedEmailProvider == EmailProvider.outlook ||
+        await _outlookAuth.hasAccess()) {
       await _syncOutlook(since: _incrementalSyncStart());
       return;
     }
@@ -1893,10 +1894,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   }
 
   Future<void> _importEmail() async {
-    if (data.settings.connectedEmailProvider != EmailProvider.outlook) {
+    if (data.settings.connectedEmailProvider != EmailProvider.outlook &&
+        !await _outlookAuth.hasAccess()) {
       await _importGmail();
       return;
     }
+    if (!mounted) return;
     final today = DateTime.now();
     final range = await showDateRangePicker(
       context: context,
