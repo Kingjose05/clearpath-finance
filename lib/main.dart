@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:convert';
 
 import 'package:background_fetch/background_fetch.dart';
+import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -43,14 +44,152 @@ Future<void> main() async {
   }
 
   runApp(
-    DebtPlannerApp(
-      store: store,
-      planner: const PaymentPlanner(),
-      notifications: ReminderNotificationService(),
-      emailSync: GmailPurchaseSyncService(),
-      backgroundSync: const BackgroundEmailSyncService(),
+    AppLockGate(
+      preferences: prefs,
+      child: DebtPlannerApp(
+        store: store,
+        planner: const PaymentPlanner(),
+        notifications: ReminderNotificationService(),
+        emailSync: GmailPurchaseSyncService(),
+        backgroundSync: const BackgroundEmailSyncService(),
+      ),
     ),
   );
+}
+
+class AppLockGate extends StatefulWidget {
+  const AppLockGate({
+    super.key,
+    required this.preferences,
+    required this.child,
+  });
+
+  final SharedPreferences preferences;
+  final Widget child;
+
+  @override
+  State<AppLockGate> createState() => _AppLockGateState();
+}
+
+class _AppLockGateState extends State<AppLockGate> {
+  static const _key = 'clearpath_local_lock_hash';
+  final _passcode = TextEditingController();
+  bool _loading = true;
+  bool _hasPasscode = false;
+  bool _unlocked = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _hasPasscode = widget.preferences.getString(_key)?.isNotEmpty == true;
+    _loading = false;
+  }
+
+  @override
+  void dispose() {
+    _passcode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _continue() async {
+    final value = _passcode.text.trim();
+    if (value.length < 4) {
+      setState(() => _error = 'Use at least 4 characters.');
+      return;
+    }
+    final hash = sha256.convert(utf8.encode(value)).toString();
+    if (_hasPasscode && widget.preferences.getString(_key) != hash) {
+      setState(() => _error = 'That passcode is not correct.');
+      return;
+    }
+    if (!_hasPasscode) await widget.preferences.setString(_key, hash);
+    if (mounted) setState(() => _unlocked = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_unlocked) return widget.child;
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: _teal),
+        scaffoldBackgroundColor: _paper,
+      ),
+      home: Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 390),
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: _loading
+                    ? const CircularProgressIndicator()
+                    : Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Icon(
+                            Icons.lock_outline,
+                            size: 42,
+                            color: _teal,
+                          ),
+                          const SizedBox(height: 20),
+                          Text(
+                            _hasPasscode
+                                ? 'Unlock ClearPath'
+                                : 'Protect ClearPath',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _hasPasscode
+                                ? 'Enter your local passcode to continue.'
+                                : 'Create a local passcode for this browser or device.',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: _muted),
+                          ),
+                          const SizedBox(height: 24),
+                          TextField(
+                            controller: _passcode,
+                            obscureText: true,
+                            autofocus: true,
+                            onSubmitted: (_) => _continue(),
+                            decoration: InputDecoration(
+                              labelText: _hasPasscode
+                                  ? 'Passcode'
+                                  : 'Create passcode',
+                              errorText: _error,
+                              prefixIcon: const Icon(Icons.key_outlined),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          FilledButton(
+                            onPressed: _continue,
+                            child: Text(
+                              _hasPasscode ? 'Unlock' : 'Create and continue',
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          const Text(
+                            'Your financial data and connected-email tokens stay on this device. This passcode is never sent to ClearPath.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: _muted, fontSize: 12),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class DebtPlannerApp extends StatelessWidget {
