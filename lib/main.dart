@@ -294,6 +294,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         data: data,
         onEditCard: _showCardSheet,
         onAddCard: () => _showCardSheet(),
+        onImportStatements: _showStatementImportSheet,
         onEditLoan: _showLoanSheet,
         onAddLoan: () => _showLoanSheet(),
       ),
@@ -2873,6 +2874,7 @@ class CardsView extends StatelessWidget {
     required this.data,
     required this.onEditCard,
     required this.onAddCard,
+    required this.onImportStatements,
     required this.onEditLoan,
     required this.onAddLoan,
   });
@@ -2880,6 +2882,7 @@ class CardsView extends StatelessWidget {
   final DebtAppData data;
   final ValueChanged<CreditCard> onEditCard;
   final VoidCallback onAddCard;
+  final VoidCallback onImportStatements;
   final ValueChanged<Loan> onEditLoan;
   final VoidCallback onAddLoan;
 
@@ -2897,6 +2900,12 @@ class CardsView extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: onImportStatements,
+          icon: const Icon(Icons.document_scanner_outlined),
+          label: const Text('Import or update from screenshots'),
+        ),
+        const SizedBox(height: 12),
         if (data.cards.isEmpty)
           const _EmptyPanel(
             icon: Icons.add_card_outlined,
