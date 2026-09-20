@@ -732,42 +732,80 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     final vision = const StatementVisionService();
     final drafts = <StatementDraft>[];
     var unreadableImages = 0;
-    for (final file in picked) {
-      String text = '';
-      Uint8List? imageBytes;
-      try {
-        imageBytes = await file.readAsBytes();
-      } catch (_) {
-        // A platform may expose a path but deny a second read; OCR/manual
-        // review can still proceed without an inline preview.
-      }
-      StatementDraft? visionDraft;
-      try {
-        if (imageBytes != null && imageBytes.isNotEmpty) {
-          visionDraft = await vision.analyze(
-            fileName: file.name,
-            imageBytes: imageBytes,
-          );
-        }
-      } catch (_) {
-        // Browser OCR remains a useful no-network fallback.
-      }
-      try {
-        if (visionDraft == null) {
-          text = await ocr.extractText(file.path, imageBytes: imageBytes);
-        }
-      } catch (_) {
-        // The editable review step remains available when recognition fails.
-      }
-      if (visionDraft == null && text.trim().isEmpty) unreadableImages++;
-      drafts.add(
-        visionDraft ??
-            parseStatementText(
-              fileName: file.name,
-              text: text,
-              imageBytes: imageBytes,
+    var visionFailures = 0;
+    final progress = ValueNotifier<String>('Preparing your screenshots...');
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('Analyzing statements'),
+          content: ValueListenableBuilder<String>(
+            valueListenable: progress,
+            builder: (context, message, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const LinearProgressIndicator(),
+                const SizedBox(height: 20),
+                Text(message),
+                const SizedBox(height: 6),
+                const Text(
+                  'AI is reading balances, currencies, dates, and cuotas.',
+                  style: TextStyle(color: _muted),
+                ),
+              ],
             ),
-      );
+          ),
+        ),
+      ),
+    );
+    try {
+      for (var index = 0; index < picked.length; index++) {
+        final file = picked[index];
+        progress.value =
+            'Reading ${index + 1} of ${picked.length}: ${file.name}';
+        String text = '';
+        Uint8List? imageBytes;
+        try {
+          imageBytes = await file.readAsBytes();
+        } catch (_) {
+          // A platform may expose a path but deny a second read; OCR/manual
+          // review can still proceed without an inline preview.
+        }
+        StatementDraft? visionDraft;
+        try {
+          if (imageBytes != null && imageBytes.isNotEmpty) {
+            visionDraft = await vision.analyze(
+              fileName: file.name,
+              imageBytes: imageBytes,
+            );
+          }
+        } catch (_) {
+          visionFailures++;
+          // Browser OCR remains a useful no-network fallback.
+        }
+        try {
+          if (visionDraft == null) {
+            text = await ocr.extractText(file.path, imageBytes: imageBytes);
+          }
+        } catch (_) {
+          // The editable review step remains available when recognition fails.
+        }
+        if (visionDraft == null && text.trim().isEmpty) unreadableImages++;
+        drafts.add(
+          visionDraft ??
+              parseStatementText(
+                fileName: file.name,
+                text: text,
+                imageBytes: imageBytes,
+              ),
+        );
+      }
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      progress.dispose();
     }
 
     final candidates = <_StatementCandidate>[];
@@ -811,6 +849,11 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     if (unreadableImages > 0 && mounted) {
       _snack(
         'Text recognition could not read $unreadableImages image${unreadableImages == 1 ? '' : 's'}. Check the image is sharp, then enter the visible values in the review form.',
+      );
+    }
+    if (visionFailures > 0 && mounted) {
+      _snack(
+        'AI analysis was unavailable for $visionFailures image${visionFailures == 1 ? '' : 's'}; the browser OCR fallback was used. Check that your Cloudflare Worker is deployed with the updated code and OPENAI_API_KEY secret.',
       );
     }
     await _reviewStatementCandidates(candidates);

@@ -32,11 +32,15 @@ class StatementVisionService {
           }),
         )
         .timeout(const Duration(seconds: 75));
-    if (response.statusCode != 200) return null;
+    if (response.statusCode != 200) {
+      throw StateError('Vision Worker returned ${response.statusCode}.');
+    }
 
     final payload = jsonDecode(response.body);
     if (payload is! Map<String, dynamic> || payload['statement'] is! Map) {
-      return null;
+      throw const FormatException(
+        'Vision Worker returned invalid statement data.',
+      );
     }
     return StatementDraft.fromVision(
       fileName: fileName,
