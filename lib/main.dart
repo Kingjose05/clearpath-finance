@@ -312,6 +312,10 @@ class DebtPlannerHome extends StatefulWidget {
   State<DebtPlannerHome> createState() => _DebtPlannerHomeState();
 }
 
+enum _ManualEntryType { account, creditCard, debitCard }
+
+enum _StatementEntryType { account, creditCard, debitCard }
+
 class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   int _tabIndex = 0;
   bool _syncing = false;
@@ -981,6 +985,15 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     final types = {
       for (final candidate in candidates) candidate.key: candidate.accountType,
     };
+    final entryTypes = {
+      for (final candidate in candidates)
+        candidate.key: candidate.accountType == AccountType.credit
+            ? _StatementEntryType.creditCard
+            : _StatementEntryType.account,
+    };
+    final linkedDebitAccountIds = {
+      for (final candidate in candidates) candidate.key: null as String?,
+    };
     final associatedDebitCards = {
       for (final candidate in candidates)
         candidate.key: TextEditingController(
@@ -1065,32 +1078,62 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                 ],
               ),
               const SizedBox(height: 10),
-              SegmentedButton<AccountType>(
+              SegmentedButton<_StatementEntryType>(
                 segments: const [
                   ButtonSegment(
-                    value: AccountType.debit,
-                    label: Text('Debit / cash'),
+                    value: _StatementEntryType.account,
+                    label: Text('Account'),
                     icon: Icon(Icons.account_balance_wallet_outlined),
                   ),
                   ButtonSegment(
-                    value: AccountType.credit,
+                    value: _StatementEntryType.creditCard,
                     label: Text('Credit card'),
                     icon: Icon(Icons.credit_card),
                   ),
+                  ButtonSegment(
+                    value: _StatementEntryType.debitCard,
+                    label: Text('Debit card'),
+                    icon: Icon(Icons.wallet_outlined),
+                  ),
                 ],
-                selected: {types[candidate.key]!},
-                onSelectionChanged: (value) =>
-                    setLocalState(() => types[candidate.key] = value.first),
+                selected: {entryTypes[candidate.key]!},
+                onSelectionChanged: (value) => setLocalState(() {
+                  entryTypes[candidate.key] = value.first;
+                  types[candidate.key] =
+                      value.first == _StatementEntryType.creditCard
+                      ? AccountType.credit
+                      : AccountType.debit;
+                }),
               ),
               const SizedBox(height: 10),
-              _MoneyField(
-                controller: balances[candidate.key]!,
-                label: types[candidate.key] == AccountType.debit
-                    ? 'Available balance (${candidate.currency})'
-                    : candidate.currency == 'USD'
-                    ? 'Statement balance (USD)'
-                    : 'Revolving balance (DOP)',
-              ),
+              if (entryTypes[candidate.key] == _StatementEntryType.debitCard)
+                DropdownButtonFormField<String>(
+                  initialValue: linkedDebitAccountIds[candidate.key],
+                  decoration: const InputDecoration(
+                    labelText: 'Debit account this card uses',
+                  ),
+                  items: data.cards
+                      .where((account) => account.isDebit)
+                      .map(
+                        (account) => DropdownMenuItem(
+                          value: account.id,
+                          child: Text('${account.name} · ${account.lastFour}'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => setLocalState(
+                    () => linkedDebitAccountIds[candidate.key] = value,
+                  ),
+                ),
+              if (entryTypes[candidate.key] != _StatementEntryType.debitCard)
+                _MoneyField(
+                  controller: balances[candidate.key]!,
+                  label: types[candidate.key] == AccountType.debit
+                      ? 'Available balance (${candidate.currency})'
+                      : candidate.currency == 'USD'
+                      ? 'Statement balance (USD)'
+                      : 'Revolving balance (DOP)',
+                ),
               if (types[candidate.key] == AccountType.credit) ...[
                 const SizedBox(height: 10),
                 _MoneyField(
@@ -1171,10 +1214,36 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       ),
     );
     if (submitted != true) return;
+    final unlinkedDebitCard = candidates.any(
+      (candidate) =>
+          entryTypes[candidate.key] == _StatementEntryType.debitCard &&
+          linkedDebitAccountIds[candidate.key] == null,
+    );
+    if (unlinkedDebitCard) {
+      if (mounted) _snack('Choose the debit account for each debit card.');
+      return;
+    }
     for (final candidate in candidates) {
       final enteredLastFour = _normalizedLastFour(
         lastFours[candidate.key]!.text,
       );
+      if (entryTypes[candidate.key] == _StatementEntryType.debitCard) {
+        final parents = data.cards.where(
+          (account) => account.id == linkedDebitAccountIds[candidate.key],
+        );
+        if (parents.isNotEmpty && enteredLastFour.length == 4) {
+          final parent = parents.first;
+          final identifiers = {
+            ...parent.associatedDebitCardLastFours,
+            enteredLastFour,
+          };
+          await widget.store.upsertCard(
+            parent.copyWith(associatedDebitCardLastFours: identifiers.toList()),
+          );
+          await widget.store.linkDebitCardIdentifiers(parent.id, identifiers);
+        }
+        continue;
+      }
       // Look up again at save time. A matching account may have been created
       // earlier in this same import batch or corrected in the review form.
       final existing =
@@ -1511,6 +1580,10 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     );
     var accent = card?.accentColor ?? _teal.toARGB32();
     var accountType = card?.accountType ?? AccountType.credit;
+    var entryType = card?.isDebit == true
+        ? _ManualEntryType.account
+        : _ManualEntryType.creditCard;
+    String? linkedDebitAccountId;
     var currency = card?.currency ?? 'DOP';
     final installmentBalance = TextEditingController(
       text: (card?.installmentBalance ?? 0).toStringAsFixed(2),
@@ -1532,30 +1605,74 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
             return _SheetFrame(
               title: isNew ? 'Add account' : 'Edit account',
               children: [
+                if (isNew) ...[
+                  SegmentedButton<_ManualEntryType>(
+                    segments: const [
+                      ButtonSegment(
+                        value: _ManualEntryType.account,
+                        icon: Icon(Icons.account_balance_outlined),
+                        label: Text('Account'),
+                      ),
+                      ButtonSegment(
+                        value: _ManualEntryType.creditCard,
+                        icon: Icon(Icons.credit_card),
+                        label: Text('Credit card'),
+                      ),
+                      ButtonSegment(
+                        value: _ManualEntryType.debitCard,
+                        icon: Icon(Icons.wallet_outlined),
+                        label: Text('Debit card'),
+                      ),
+                    ],
+                    selected: {entryType},
+                    onSelectionChanged: (value) => setLocalState(() {
+                      entryType = value.first;
+                      accountType = entryType == _ManualEntryType.creditCard
+                          ? AccountType.credit
+                          : AccountType.debit;
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 TextField(
                   controller: name,
                   textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(labelText: 'Account name'),
+                  decoration: InputDecoration(
+                    labelText: entryType == _ManualEntryType.debitCard
+                        ? 'Debit card name (optional)'
+                        : entryType == _ManualEntryType.creditCard
+                        ? 'Credit card name'
+                        : 'Account name',
+                  ),
                 ),
                 const SizedBox(height: 12),
-                SegmentedButton<AccountType>(
-                  segments: const [
-                    ButtonSegment(
-                      value: AccountType.credit,
-                      icon: Icon(Icons.credit_card),
-                      label: Text('Credit'),
+                if (entryType == _ManualEntryType.debitCard) ...[
+                  DropdownButtonFormField<String>(
+                    initialValue: linkedDebitAccountId,
+                    decoration: const InputDecoration(
+                      labelText: 'Debit account this card uses',
                     ),
-                    ButtonSegment(
-                      value: AccountType.debit,
-                      icon: Icon(Icons.account_balance_wallet_outlined),
-                      label: Text('Debit'),
-                    ),
-                  ],
-                  selected: {accountType},
-                  onSelectionChanged: (value) =>
-                      setLocalState(() => accountType = value.first),
-                ),
-                const SizedBox(height: 12),
+                    items: data.cards
+                        .where((account) => account.isDebit)
+                        .map(
+                          (account) => DropdownMenuItem(
+                            value: account.id,
+                            child: Text(
+                              '${account.name} · ${account.lastFour}',
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) => setLocalState(() {
+                      linkedDebitAccountId = value;
+                      final account = data.cards.where(
+                        (item) => item.id == value,
+                      );
+                      if (account.isNotEmpty) currency = account.first.currency;
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 DropdownButtonFormField<String>(
                   initialValue: currency,
                   decoration: const InputDecoration(labelText: 'Currency'),
@@ -1576,23 +1693,27 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                 TextField(
                   controller: lastFour,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Last four'),
+                  decoration: InputDecoration(
+                    labelText: entryType == _ManualEntryType.debitCard
+                        ? 'Debit-card last four'
+                        : 'Last four',
+                  ),
                 ),
                 const SizedBox(height: 12),
-                if (accountType == AccountType.debit)
+                if (entryType == _ManualEntryType.account)
                   _MoneyField(controller: balance, label: 'Available balance'),
-                if (accountType == AccountType.debit)
+                if (entryType == _ManualEntryType.account)
                   const SizedBox(height: 12),
-                if (accountType == AccountType.debit)
+                if (entryType == _ManualEntryType.account)
                   TextField(
                     controller: associatedDebitCards,
                     decoration: const InputDecoration(
-                      labelText: 'Associated debit-card last four',
+                      labelText: 'Add or edit associated debit-card last four',
                     ),
                   ),
-                if (accountType == AccountType.debit)
+                if (entryType == _ManualEntryType.account)
                   const SizedBox(height: 12),
-                if (accountType == AccountType.credit)
+                if (entryType == _ManualEntryType.creditCard)
                   Row(
                     children: [
                       Expanded(
@@ -1607,9 +1728,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                       ),
                     ],
                   ),
-                if (accountType == AccountType.credit)
+                if (entryType == _ManualEntryType.creditCard)
                   const SizedBox(height: 12),
-                if (accountType == AccountType.credit)
+                if (entryType == _ManualEntryType.creditCard)
                   Row(
                     children: [
                       Expanded(
@@ -1624,9 +1745,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                       ),
                     ],
                   ),
-                if (accountType == AccountType.credit)
+                if (entryType == _ManualEntryType.creditCard)
                   const SizedBox(height: 12),
-                if (accountType == AccountType.credit)
+                if (entryType == _ManualEntryType.creditCard)
                   Row(
                     children: [
                       Expanded(
@@ -1641,9 +1762,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                       ),
                     ],
                   ),
-                if (accountType == AccountType.credit)
+                if (entryType == _ManualEntryType.creditCard)
                   const SizedBox(height: 12),
-                if (accountType == AccountType.credit)
+                if (entryType == _ManualEntryType.creditCard)
                   Row(
                     children: [
                       Expanded(
@@ -1695,7 +1816,13 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                 FilledButton.icon(
                   onPressed: () => Navigator.pop(context, true),
                   icon: const Icon(Icons.save_outlined),
-                  label: Text(isNew ? 'Add account' : 'Save account'),
+                  label: Text(
+                    isNew
+                        ? entryType == _ManualEntryType.debitCard
+                              ? 'Link debit card'
+                              : 'Add'
+                        : 'Save account',
+                  ),
                 ),
               ],
             );
@@ -1704,7 +1831,35 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       },
     );
 
-    if (submitted != true || name.text.trim().isEmpty) return;
+    if (submitted != true) return;
+    if (entryType == _ManualEntryType.debitCard) {
+      final parents = data.cards.where(
+        (account) => account.id == linkedDebitAccountId,
+      );
+      final debitCardLastFour = _normalizedLastFour(lastFour.text);
+      if (parents.isEmpty || debitCardLastFour.length != 4) {
+        if (mounted) {
+          _snack('Choose a debit account and enter the debit-card last four.');
+        }
+        return;
+      }
+      final parent = parents.first;
+      final identifiers = {
+        ...parent.associatedDebitCardLastFours,
+        debitCardLastFour,
+      };
+      await widget.store.upsertCard(
+        parent.copyWith(associatedDebitCardLastFours: identifiers.toList()),
+      );
+      await widget.store.linkDebitCardIdentifiers(parent.id, identifiers);
+      await _saveAndRefresh();
+      if (mounted) _snack('Debit card linked to ${parent.name}.');
+      return;
+    }
+    if (name.text.trim().isEmpty) return;
+    accountType = entryType == _ManualEntryType.creditCard
+        ? AccountType.credit
+        : AccountType.debit;
     final accountId = card?.id ?? newId('card');
     final debitCardIdentifiers = accountType == AccountType.debit
         ? associatedDebitCards.text
@@ -3268,7 +3423,7 @@ class CardsView extends StatelessWidget {
           trailing: FilledButton.icon(
             onPressed: onAddCard,
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('Account'),
+            label: const Text('Add'),
           ),
         ),
         const SizedBox(height: 10),
