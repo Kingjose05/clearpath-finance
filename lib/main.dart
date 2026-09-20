@@ -774,10 +774,10 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           // A platform may expose a path but deny a second read; OCR/manual
           // review can still proceed without an inline preview.
         }
-        StatementDraft? visionDraft;
+        var visionDrafts = <StatementDraft>[];
         try {
           if (imageBytes != null && imageBytes.isNotEmpty) {
-            visionDraft = await vision.analyze(
+            visionDrafts = await vision.analyze(
               fileName: file.name,
               imageBytes: imageBytes,
             );
@@ -787,21 +787,24 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           // Browser OCR remains a useful no-network fallback.
         }
         try {
-          if (visionDraft == null) {
+          if (visionDrafts.isEmpty) {
             text = await ocr.extractText(file.path, imageBytes: imageBytes);
           }
         } catch (_) {
           // The editable review step remains available when recognition fails.
         }
-        if (visionDraft == null && text.trim().isEmpty) unreadableImages++;
-        drafts.add(
-          visionDraft ??
-              parseStatementText(
-                fileName: file.name,
-                text: text,
-                imageBytes: imageBytes,
-              ),
-        );
+        if (visionDrafts.isEmpty && text.trim().isEmpty) unreadableImages++;
+        if (visionDrafts.isNotEmpty) {
+          drafts.addAll(visionDrafts);
+        } else {
+          drafts.add(
+            parseStatementText(
+              fileName: file.name,
+              text: text,
+              imageBytes: imageBytes,
+            ),
+          );
+        }
       }
     } finally {
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
@@ -950,7 +953,14 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                     ),
                   ),
                   if (candidate.source.rawText.isNotEmpty)
-                    const _StatusChip(label: 'OCR read', color: _teal),
+                    _StatusChip(
+                      label:
+                          candidate.source.analysisSource ==
+                              StatementAnalysisSource.ai
+                          ? 'AI read'
+                          : 'OCR read',
+                      color: _teal,
+                    ),
                 ],
               ),
               if (candidate.source.currentTotalDop != null)

@@ -29,6 +29,7 @@ class StatementDraft {
     this.cutoffDate,
     this.dueDate,
     this.accountName = '',
+    this.analysisSource = StatementAnalysisSource.ocr,
   });
 
   final String fileName;
@@ -50,6 +51,7 @@ class StatementDraft {
   final DateTime? cutoffDate;
   final DateTime? dueDate;
   final String accountName;
+  final StatementAnalysisSource analysisSource;
 
   bool get hasDop =>
       currentTotalDop != null ||
@@ -112,9 +114,12 @@ class StatementDraft {
       installmentMonthlyPayment: number('installmentMonthlyPayment'),
       cutoffDate: date('cutoffDate'),
       dueDate: date('dueDate'),
+      analysisSource: StatementAnalysisSource.ai,
     );
   }
 }
+
+enum StatementAnalysisSource { ai, ocr }
 
 class StatementOcrService {
   const StatementOcrService();

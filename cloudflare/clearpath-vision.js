@@ -38,6 +38,20 @@ const statementSchema = {
   },
 };
 
+const responseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['statements'],
+  properties: {
+    statements: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 12,
+      items: statementSchema,
+    },
+  },
+};
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
@@ -71,7 +85,7 @@ export default {
           content: [
             {
               type: 'input_text',
-              text: 'Read this Dominican Republic bank account or card screenshot exactly. Extract only visibly present values; do not infer or invent. bankName is the bank (for example APAP, BHD, Banco Popular); accountName is the visible product/card name plus last four when available. For debit, savings, or checking accounts use accountType debit; otherwise credit. Map "Saldo a la fecha", "Balance a la fecha", "Balance total", or "Total adeudado" to currentTotal in its correct currency. Map "Balance al corte" or "Saldo al corte" only to statementBalance. Map "Pago minimo" only to minimumDue. Map "Disponible" or "Balance disponible" only to availableBalance. Never put a credit limit or available credit into a debt field. Keep DOP and USD values separate. Treat cuotas/installments separately: installmentMonthlyPayment is only a monthly cuota/monto cuota; installmentBalance is only an explicitly stated total outstanding cuotas balance. If the screenshot gives only a monthly cuota, leave installmentBalance null. Dates must be YYYY-MM-DD only when a full date is shown; otherwise null. All amounts are positive numbers without currency symbols. rawText should concisely transcribe the relevant labels and values.',
+              text: 'Read this Dominican Republic bank app screenshot exactly. Return ONE statement object for EACH distinct visible card or bank-account row; a screenshot can contain many accounts. Extract only visibly present values; do not infer or invent. bankName is the bank (for example Banreservas, APAP, BHD, Banco Popular). accountName is the visible product/card name. lastFour is ONLY the four digits explicitly masked as an account/card suffix (for example *6333 gives 6333); never take digits from an amount, date, time, credit limit, or any other number. For debit, savings, or checking accounts use accountType debit; otherwise credit. Map "Saldo a la fecha", "Balance a la fecha", "Balance total", or "Total adeudado" to currentTotal in its correct currency. Map "Balance al corte" or "Saldo al corte" only to statementBalance. Map "Pago minimo" only to minimumDue. Map "Disponible" or "Balance disponible" only to availableBalance. Never put a credit limit or available credit into a debt field. Keep DOP and USD values separate. Treat cuotas/installments separately: installmentMonthlyPayment is only a monthly cuota/monto cuota; installmentBalance is only an explicitly stated total outstanding cuotas balance. If the screenshot gives only a monthly cuota, leave installmentBalance null. Dates must be YYYY-MM-DD only when a full date is shown; otherwise null. All amounts are positive numbers without currency symbols. rawText should concisely transcribe the relevant labels and values.',
             },
             { type: 'input_image', image_url: body.image, detail: 'high' },
           ],
@@ -79,9 +93,9 @@ export default {
         text: {
           format: {
             type: 'json_schema',
-            name: 'bank_statement',
+            name: 'bank_statements',
             strict: true,
-            schema: statementSchema,
+            schema: responseSchema,
           },
         },
       }),
@@ -90,7 +104,7 @@ export default {
     const result = await openai.json();
     if (!openai.ok) return reply({ error: result.error?.message || 'Vision analysis failed.' }, openai.status);
     try {
-      return reply({ statement: JSON.parse(result.output_text) });
+      return reply({ statements: JSON.parse(outputText(result)).statements });
     } catch (_) {
       return reply({ error: 'Vision response was not valid statement data.' }, 502);
     }
@@ -99,4 +113,16 @@ export default {
 
 function reply(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: corsHeaders });
+}
+
+function outputText(result) {
+  if (typeof result.output_text === 'string') return result.output_text;
+  for (const item of result.output || []) {
+    for (const content of item.content || []) {
+      if (content.type === 'output_text' && typeof content.text === 'string') {
+        return content.text;
+      }
+    }
+  }
+  throw new Error('OpenAI returned no text output.');
 }

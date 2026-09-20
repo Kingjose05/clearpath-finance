@@ -13,7 +13,7 @@ const _workerUrl = String.fromEnvironment(
 class StatementVisionService {
   const StatementVisionService();
 
-  Future<StatementDraft?> analyze({
+  Future<List<StatementDraft>> analyze({
     required String fileName,
     required Uint8List imageBytes,
   }) async {
@@ -37,15 +37,20 @@ class StatementVisionService {
     }
 
     final payload = jsonDecode(response.body);
-    if (payload is! Map<String, dynamic> || payload['statement'] is! Map) {
+    if (payload is! Map<String, dynamic> || payload['statements'] is! List) {
       throw const FormatException(
         'Vision Worker returned invalid statement data.',
       );
     }
-    return StatementDraft.fromVision(
-      fileName: fileName,
-      imageBytes: imageBytes,
-      values: Map<String, dynamic>.from(payload['statement'] as Map),
-    );
+    return (payload['statements'] as List)
+        .whereType<Map>()
+        .map(
+          (statement) => StatementDraft.fromVision(
+            fileName: fileName,
+            imageBytes: imageBytes,
+            values: Map<String, dynamic>.from(statement),
+          ),
+        )
+        .toList();
   }
 }
