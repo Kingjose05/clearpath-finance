@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -32,6 +33,7 @@ class OutlookAuthService {
       'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
   static const _token =
       'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+  static const _networkTimeout = Duration(seconds: 25);
   static const _ios = IOSOptions(
     accessibility: KeychainAccessibility.first_unlock_this_device,
   );
@@ -301,13 +303,20 @@ class OutlookAuthService {
   Future<http.Response> _messagesRequest(
     String token,
     Map<String, String> query,
-  ) => http.get(
-    Uri.https('graph.microsoft.com', '/v1.0/me/messages', query),
-    headers: {
-      'Authorization': 'Bearer $token',
-      'Prefer': 'outlook.body-content-type="text"',
-    },
-  );
+  ) => http
+      .get(
+        Uri.https('graph.microsoft.com', '/v1.0/me/messages', query),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Prefer': 'outlook.body-content-type="text"',
+        },
+      )
+      .timeout(
+        _networkTimeout,
+        onTimeout: () => throw const OutlookAuthException(
+          'Outlook did not respond within 25 seconds. Check your connection and try Sync again.',
+        ),
+      );
 
   Future<String?> _usableAccessToken({bool forceRefresh = false}) async {
     final token = await _storage.read(key: _tokenKey, iOptions: _ios);
@@ -330,16 +339,23 @@ class OutlookAuthService {
     if (refreshToken == null || refreshToken.isEmpty || clientId == null) {
       return null;
     }
-    final response = await http.post(
-      Uri.parse(_token),
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: {
-        'client_id': clientId,
-        'grant_type': 'refresh_token',
-        'refresh_token': refreshToken,
-        'scope': 'openid profile offline_access User.Read Mail.Read',
-      },
-    );
+    final response = await http
+        .post(
+          Uri.parse(_token),
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: {
+            'client_id': clientId,
+            'grant_type': 'refresh_token',
+            'refresh_token': refreshToken,
+            'scope': 'openid profile offline_access User.Read Mail.Read',
+          },
+        )
+        .timeout(
+          _networkTimeout,
+          onTimeout: () => throw const OutlookAuthException(
+            'Outlook sign-in refresh timed out. Connect Outlook again and retry.',
+          ),
+        );
     if (response.statusCode != 200) return null;
     final payload = _body(response);
     final refreshedToken = payload['access_token']?.toString();
