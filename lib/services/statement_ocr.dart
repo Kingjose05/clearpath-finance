@@ -345,7 +345,7 @@ String _lastFour(String text) {
 
 double? _amountAfter(String text, List<String> labels) {
   for (final label in labels) {
-    final escaped = RegExp.escape(label).replaceAll(r'\ ', r'\s+');
+    final escaped = RegExp.escape(label).replaceAll(' ', r'\s+');
     final match = RegExp(
       '$escaped[^\\d]{0,36}([\\d.,]+)',
       caseSensitive: false,
