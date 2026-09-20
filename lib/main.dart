@@ -368,7 +368,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
               !RegExp(
                 r'transfer|transferencia|interaccount|inter-account',
                 caseSensitive: false,
-              ).hasMatch(purchase.subject),
+              ).hasMatch(purchase.subject ?? ''),
         )
         .map((purchase) => purchase.sourceMessageId)
         .whereType<String>()

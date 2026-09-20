@@ -310,7 +310,7 @@ List<CreditCard> _revertPurchaseFromCards(
         ? switch (transaction.kind) {
             TransactionKind.income ||
             TransactionKind.transferIn ||
-            TransactionKind.refund => math.max(0, card.balance - amount),
+            TransactionKind.refund => math.max(0.0, card.balance - amount),
             TransactionKind.adjustment => card.balance,
             _ => card.balance + amount,
           }
@@ -320,7 +320,7 @@ List<CreditCard> _revertPurchaseFromCards(
             TransactionKind.refund => card.balance + amount,
             TransactionKind.adjustment ||
             TransactionKind.income => card.balance,
-            _ => math.max(0, card.balance - amount),
+            _ => math.max(0.0, card.balance - amount),
           };
     return card.copyWith(balance: balance);
   }).toList();
