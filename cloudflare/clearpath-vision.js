@@ -12,7 +12,7 @@ const statementSchema = {
   additionalProperties: false,
   required: [
     'bankName', 'accountName', 'lastFour', 'associatedDebitCardLastFours', 'accountType', 'availableBalanceDop',
-    'availableBalanceUsd', 'currentTotalDop', 'statementBalanceDop',
+    'availableBalanceUsd', 'creditLimitDop', 'creditLimitUsd', 'installmentCreditLimitDop', 'installmentCreditLimitUsd', 'currentTotalDop', 'statementBalanceDop',
     'currentTotalUsd', 'minimumDueDop', 'statementBalanceUsd', 'minimumDueUsd',
     'installmentBalance', 'installmentMonthlyPayment', 'cutoffDate',
     'dueDate', 'rawText',
@@ -25,6 +25,10 @@ const statementSchema = {
     accountType: { type: 'string', enum: ['credit', 'debit'] },
     availableBalanceDop: { type: ['number', 'null'] },
     availableBalanceUsd: { type: ['number', 'null'] },
+    creditLimitDop: { type: ['number', 'null'] },
+    creditLimitUsd: { type: ['number', 'null'] },
+    installmentCreditLimitDop: { type: ['number', 'null'] },
+    installmentCreditLimitUsd: { type: ['number', 'null'] },
     currentTotalDop: { type: ['number', 'null'] },
     currentTotalUsd: { type: ['number', 'null'] },
     statementBalanceDop: { type: ['number', 'null'] },
@@ -86,7 +90,7 @@ export default {
           content: [
             {
               type: 'input_text',
-              text: 'Read this Dominican Republic bank app screenshot exactly. Return ONE statement object for EACH distinct visible card or bank-account row; a screenshot can contain many accounts. Extract only visibly present values; do not infer or invent. bankName is the bank (for example Banreservas, APAP, BHD, Banco Popular). accountName is the visible product/card name. lastFour is the final four digits of the visible account or card identifier. It may be masked (for example *6333 gives 6333) OR it may be a full account number next to the product name (for example 1021351385 gives 1385). Never take digits from an amount, date, time, credit limit, or any other number. associatedDebitCardLastFours is for debit/checking/savings accounts only: when a debit card shown under or linked to that account has a different masked suffix, add that card suffix there. The debit card is not a separate account and must not produce a separate statement object. For debit, savings, or checking accounts use accountType debit; otherwise credit. Map "Saldo a la fecha", "Balance a la fecha", "Balance total", or "Total adeudado" to currentTotal in its correct currency. Map "Balance al corte" or "Saldo al corte" only to statementBalance. Map "Pago minimo" only to minimumDue. Map "Disponible" or "Balance disponible" only to availableBalance. Never put a credit limit or available credit into a debt field. Keep DOP and USD values separate. Treat cuotas/installments separately: installmentMonthlyPayment is only a monthly cuota/monto cuota; installmentBalance is only an explicitly stated total outstanding cuotas balance. If the screenshot gives only a monthly cuota, leave installmentBalance null. Dates must be YYYY-MM-DD only when a full date is shown; otherwise null. All amounts are positive numbers without currency symbols. rawText should concisely transcribe the relevant labels and values.',
+              text: 'Read this Dominican Republic bank app screenshot exactly. Return ONE statement object for EACH distinct visible card or bank-account row; a screenshot can contain many accounts. Extract only visibly present values; do not infer or invent. bankName is the bank (for example Banreservas, APAP, BHD, Banco Popular). accountName is the visible product/card name. lastFour is the final four digits of the visible account or card identifier. It may be masked (for example *6333 gives 6333) OR it may be a full account number next to the product name (for example 1021351385 gives 1385). Never take digits from an amount, date, time, credit limit, or any other number. associatedDebitCardLastFours is for debit/checking/savings accounts only: when a debit card shown under or linked to that account has a different masked suffix, add that card suffix there. The debit card is not a separate account and must not produce a separate statement object. For debit, savings, or checking accounts use accountType debit; otherwise credit. Map "Saldo a la fecha", "Balance a la fecha", "Balance total", or "Total adeudado" to currentTotal in its correct currency. Map "Balance al corte" or "Saldo al corte" only to statementBalance. Map "Pago minimo" only to minimumDue. Map a regular card "Límite" to creditLimit. Map a separate Credimás / Más Límite section marked "Disponible", "Límite aprobado", or "Límite" to installmentCreditLimit, never installmentBalance: it is available cuota credit, not debt. Map "Disponible" or "Crédito disponible" for the regular card to availableBalance. When the current debt is not explicitly printed but both the regular creditLimit and availableBalance are visible, calculate currentTotal as creditLimit minus availableBalance, never using Credimás. Keep DOP and USD values separate. Treat cuotas/installments separately: installmentMonthlyPayment is only a monthly cuota/monto cuota; installmentBalance is only an explicitly stated total outstanding cuotas balance. If the screenshot gives only a monthly cuota, leave installmentBalance null. Dates must be YYYY-MM-DD only when a full date is shown; otherwise null. All amounts are positive numbers without currency symbols. rawText should concisely transcribe the relevant labels and values.',
             },
             { type: 'input_image', image_url: body.image, detail: 'high' },
           ],

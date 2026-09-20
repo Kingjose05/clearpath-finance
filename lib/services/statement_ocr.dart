@@ -18,6 +18,10 @@ class StatementDraft {
     this.accountType = AccountType.credit,
     this.availableBalanceDop,
     this.availableBalanceUsd,
+    this.creditLimitDop,
+    this.creditLimitUsd,
+    this.installmentCreditLimitDop,
+    this.installmentCreditLimitUsd,
     this.currentTotalDop,
     this.currentTotalUsd,
     this.statementBalanceDop,
@@ -41,6 +45,10 @@ class StatementDraft {
   final AccountType accountType;
   final double? availableBalanceDop;
   final double? availableBalanceUsd;
+  final double? creditLimitDop;
+  final double? creditLimitUsd;
+  final double? installmentCreditLimitDop;
+  final double? installmentCreditLimitUsd;
   final double? currentTotalDop;
   final double? currentTotalUsd;
   final double? statementBalanceDop;
@@ -59,13 +67,17 @@ class StatementDraft {
       currentTotalDop != null ||
       statementBalanceDop != null ||
       minimumDueDop != null ||
-      availableBalanceDop != null;
+      availableBalanceDop != null ||
+      creditLimitDop != null ||
+      installmentCreditLimitDop != null;
 
   bool get hasUsd =>
       currentTotalUsd != null ||
       statementBalanceUsd != null ||
       minimumDueUsd != null ||
-      availableBalanceUsd != null;
+      availableBalanceUsd != null ||
+      creditLimitUsd != null ||
+      installmentCreditLimitUsd != null;
 
   factory StatementDraft.fromVision({
     required String fileName,
@@ -128,6 +140,10 @@ class StatementDraft {
           : AccountType.credit,
       availableBalanceDop: number('availableBalanceDop'),
       availableBalanceUsd: number('availableBalanceUsd'),
+      creditLimitDop: number('creditLimitDop'),
+      creditLimitUsd: number('creditLimitUsd'),
+      installmentCreditLimitDop: number('installmentCreditLimitDop'),
+      installmentCreditLimitUsd: number('installmentCreditLimitUsd'),
       currentTotalDop: number('currentTotalDop'),
       currentTotalUsd: number('currentTotalUsd'),
       statementBalanceDop: number('statementBalanceDop'),
@@ -190,6 +206,21 @@ StatementDraft parseStatementText({
     'balance actual',
     'saldo actual',
   ]);
+  final creditLimitDop = _amountAfter(normalized, [
+    'credit limit',
+    'limite de credito',
+    'límite de crédito',
+    'limite aprobado',
+    'límite aprobado',
+    'limite',
+    'límite',
+  ]);
+  final installmentCreditLimitDop = _amountAfter(normalized, [
+    'credimas disponible',
+    'credimás disponible',
+    'mas limite disponible',
+    'más límite disponible',
+  ]);
   final statementBalanceDop = _amountAfter(normalized, [
     'balance al corte',
     'statement balance',
@@ -239,6 +270,8 @@ StatementDraft parseStatementText({
         ? usdNumbers.first
         : null,
     currentTotalDop: currentTotalDop,
+    creditLimitDop: creditLimitDop,
+    installmentCreditLimitDop: installmentCreditLimitDop,
     currentTotalUsd: usdNumbers.isEmpty ? null : usdNumbers.first,
     statementBalanceDop: statementBalanceDop,
     minimumDueDop: minimumDueDop,

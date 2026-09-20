@@ -41,6 +41,42 @@ Saldo disponible DOP 125,000.50''',
     expect(draft.availableBalanceDop, 125000.50);
   });
 
+  test('keeps card and Credimas limits separate from debt', () {
+    final draft = StatementDraft.fromVision(
+      fileName: 'banreservas-mastercard.png',
+      values: const {
+        'bankName': 'Banreservas',
+        'accountName': 'Mastercard',
+        'lastFour': '3103',
+        'associatedDebitCardLastFours': [],
+        'accountType': 'credit',
+        'availableBalanceDop': 35695.13,
+        'availableBalanceUsd': null,
+        'creditLimitDop': 39000,
+        'creditLimitUsd': null,
+        'installmentCreditLimitDop': 39000,
+        'installmentCreditLimitUsd': null,
+        'currentTotalDop': 3304.87,
+        'currentTotalUsd': null,
+        'statementBalanceDop': null,
+        'minimumDueDop': null,
+        'statementBalanceUsd': null,
+        'minimumDueUsd': null,
+        'installmentBalance': null,
+        'installmentMonthlyPayment': null,
+        'cutoffDate': '2026-08-26',
+        'dueDate': '2026-09-17',
+        'rawText':
+            'Credito disponible 35,695.13. Limite 39,000. Credimas disponible 39,000.',
+      },
+    );
+
+    expect(draft.currentTotalDop, 3304.87);
+    expect(draft.creditLimitDop, 39000);
+    expect(draft.installmentCreditLimitDop, 39000);
+    expect(draft.installmentBalance, isNull);
+  });
+
   test('allocates minimums across cards and loans before APR avalanche', () {
     final cards = [
       CreditCard(

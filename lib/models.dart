@@ -141,6 +141,7 @@ class CreditCard {
     this.currency = 'DOP',
     this.installmentBalance = 0,
     this.installmentMonthlyPayment = 0,
+    this.installmentCreditLimit = 0,
     this.needsReview = false,
     this.calibratedCutoffDate,
     this.calibratedDueDate,
@@ -167,6 +168,9 @@ class CreditCard {
   final String currency;
   final double installmentBalance;
   final double installmentMonthlyPayment;
+
+  /// Separate installment/"Credimas" line limit. It is available credit, not debt.
+  final double installmentCreditLimit;
   final bool needsReview;
   final DateTime? calibratedCutoffDate;
   final DateTime? calibratedDueDate;
@@ -231,6 +235,7 @@ class CreditCard {
     String? currency,
     double? installmentBalance,
     double? installmentMonthlyPayment,
+    double? installmentCreditLimit,
     bool? needsReview,
     DateTime? calibratedCutoffDate,
     DateTime? calibratedDueDate,
@@ -259,6 +264,8 @@ class CreditCard {
       installmentBalance: installmentBalance ?? this.installmentBalance,
       installmentMonthlyPayment:
           installmentMonthlyPayment ?? this.installmentMonthlyPayment,
+      installmentCreditLimit:
+          installmentCreditLimit ?? this.installmentCreditLimit,
       needsReview: needsReview ?? this.needsReview,
       calibratedCutoffDate: clearCalibratedDates
           ? null
@@ -288,6 +295,7 @@ class CreditCard {
     'currency': currency,
     'installmentBalance': installmentBalance,
     'installmentMonthlyPayment': installmentMonthlyPayment,
+    'installmentCreditLimit': installmentCreditLimit,
     'needsReview': needsReview,
     'calibratedCutoffDate': calibratedCutoffDate?.toIso8601String(),
     'calibratedDueDate': calibratedDueDate?.toIso8601String(),
@@ -322,6 +330,7 @@ class CreditCard {
       installmentMonthlyPayment: moneyFromJson(
         json['installmentMonthlyPayment'],
       ),
+      installmentCreditLimit: moneyFromJson(json['installmentCreditLimit']),
       needsReview: json['needsReview'] as bool? ?? false,
       calibratedCutoffDate: json['calibratedCutoffDate'] is String
           ? DateTime.tryParse(json['calibratedCutoffDate'] as String)

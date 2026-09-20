@@ -952,6 +952,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           text: candidate.minimumDue.toStringAsFixed(2),
         ),
     };
+    final creditLimits = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(
+          text: candidate.creditLimit.toStringAsFixed(2),
+        ),
+    };
     final installmentBalances = {
       for (final candidate in candidates)
         candidate.key: TextEditingController(
@@ -962,6 +968,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       for (final candidate in candidates)
         candidate.key: TextEditingController(
           text: candidate.installmentMonthlyPayment.toStringAsFixed(2),
+        ),
+    };
+    final installmentCreditLimits = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(
+          text: candidate.installmentCreditLimit.toStringAsFixed(2),
         ),
     };
     final cutoffs = {
@@ -1127,6 +1139,11 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
               if (types[candidate.key] == AccountType.credit) ...[
                 const SizedBox(height: 10),
                 _MoneyField(
+                  controller: creditLimits[candidate.key]!,
+                  label: 'Credit limit (${candidate.currency})',
+                ),
+                const SizedBox(height: 10),
+                _MoneyField(
                   controller: minimums[candidate.key]!,
                   label: 'Minimum payment (${candidate.currency})',
                 ),
@@ -1160,6 +1177,11 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 10),
+                _MoneyField(
+                  controller: installmentCreditLimits[candidate.key]!,
+                  label: 'Credimás / cuota credit limit',
                 ),
                 const Padding(
                   padding: EdgeInsets.only(top: 6),
@@ -1258,11 +1280,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
               : names[candidate.key]!.text.trim(),
           lastFour: enteredLastFour,
           balance: balance,
-          creditLimit:
-              existing?.creditLimit ??
-              (types[candidate.key] == AccountType.credit
-                  ? math.max(balance, 1)
-                  : 0),
+          creditLimit: types[candidate.key] == AccountType.credit
+              ? math.max(_parseMoney(creditLimits[candidate.key]!.text), 1)
+              : 0,
           apr: existing?.apr ?? 0,
           cutoffDay: _parseDay(cutoffs[candidate.key]!.text),
           dueDay: _parseDay(dues[candidate.key]!.text),
@@ -1288,6 +1308,11 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                   candidate.currency == 'DOP'
               ? _parseMoney(installmentPayments[candidate.key]!.text)
               : 0,
+          installmentCreditLimit:
+              types[candidate.key] == AccountType.credit &&
+                  candidate.currency == 'DOP'
+              ? _parseMoney(installmentCreditLimits[candidate.key]!.text)
+              : 0,
           calibratedCutoffDate: candidate.source.cutoffDate,
           calibratedDueDate: candidate.source.dueDate,
           needsReview: false,
@@ -1310,8 +1335,10 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       ...lastFours.values,
       ...balances.values,
       ...minimums.values,
+      ...creditLimits.values,
       ...installmentBalances.values,
       ...installmentPayments.values,
+      ...installmentCreditLimits.values,
       ...cutoffs.values,
       ...dues.values,
       ...associatedDebitCards.values,
@@ -1581,6 +1608,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     final installmentPayment = TextEditingController(
       text: (card?.installmentMonthlyPayment ?? 0).toStringAsFixed(2),
     );
+    final installmentCreditLimit = TextEditingController(
+      text: (card?.installmentCreditLimit ?? 0).toStringAsFixed(2),
+    );
 
     final submitted = await showModalBottomSheet<bool>(
       context: context,
@@ -1772,6 +1802,13 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                       ),
                     ],
                   ),
+                if (entryType == _ManualEntryType.creditCard)
+                  const SizedBox(height: 12),
+                if (entryType == _ManualEntryType.creditCard)
+                  _MoneyField(
+                    controller: installmentCreditLimit,
+                    label: 'Credimás / cuota credit limit',
+                  ),
                 const SizedBox(height: 12),
                 _NumberField(controller: remind, label: 'Remind days before'),
                 const SizedBox(height: 12),
@@ -1886,6 +1923,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
             : 0,
         installmentMonthlyPayment: accountType == AccountType.credit
             ? _parseMoney(installmentPayment.text)
+            : 0,
+        installmentCreditLimit: accountType == AccountType.credit
+            ? _parseMoney(installmentCreditLimit.text)
             : 0,
         needsReview: false,
       ),
@@ -3552,6 +3592,16 @@ class _CardDetailPanel extends StatelessWidget {
                 ),
               if (card.isCredit) const SizedBox(height: 12),
               if (card.isCredit)
+                Text(
+                  'Card limit ${_currencyMoney(card.creditLimit, card.currency)}${card.installmentCreditLimit > 0 ? ' · Credimás available ${_currencyMoney(card.installmentCreditLimit, card.currency)}' : ''}',
+                  style: const TextStyle(
+                    color: _muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              if (card.isCredit) const SizedBox(height: 12),
+              if (card.isCredit)
                 Row(
                   children: [
                     _DatePill(
@@ -5031,9 +5081,11 @@ class _StatementCandidate {
     required this.name,
     required this.lastFour,
     required this.balance,
+    required this.creditLimit,
     required this.minimumDue,
     required this.installmentBalance,
     required this.installmentMonthlyPayment,
+    required this.installmentCreditLimit,
     required this.cutoffDay,
     required this.dueDay,
     required this.existing,
@@ -5051,6 +5103,12 @@ class _StatementCandidate {
     final availableBalance = currency == 'USD'
         ? draft.availableBalanceUsd
         : draft.availableBalanceDop;
+    final creditLimit = currency == 'USD'
+        ? draft.creditLimitUsd
+        : draft.creditLimitDop;
+    final installmentCreditLimit = currency == 'USD'
+        ? draft.installmentCreditLimitUsd
+        : draft.installmentCreditLimitDop;
     final minimum = currency == 'USD'
         ? draft.minimumDueUsd
         : draft.minimumDueDop;
@@ -5089,11 +5147,17 @@ class _StatementCandidate {
                 0
           : currentTotalForCurrency ??
                 statementBalance ??
+                (creditLimit != null && availableBalance != null
+                    ? math.max(0, creditLimit - availableBalance)
+                    : null) ??
                 existing?.balance ??
                 0,
+      creditLimit: creditLimit ?? existing?.creditLimit ?? 0,
       minimumDue: minimum ?? existing?.minimumDue ?? 0,
       installmentBalance: installmentBalance.toDouble(),
       installmentMonthlyPayment: monthlyCuota.toDouble(),
+      installmentCreditLimit:
+          installmentCreditLimit ?? existing?.installmentCreditLimit ?? 0,
       cutoffDay: draft.cutoffDate?.day ?? existing?.cutoffDay ?? 1,
       dueDay: draft.dueDate?.day ?? existing?.dueDay ?? 1,
       existing: existing,
@@ -5107,9 +5171,11 @@ class _StatementCandidate {
   final String name;
   final String lastFour;
   final double balance;
+  final double creditLimit;
   final double minimumDue;
   final double installmentBalance;
   final double installmentMonthlyPayment;
+  final double installmentCreditLimit;
   final int cutoffDay;
   final int dueDay;
   final CreditCard? existing;
