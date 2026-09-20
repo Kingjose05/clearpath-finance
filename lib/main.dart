@@ -357,15 +357,23 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         .subtract(const Duration(days: 3));
   }
 
-  Set<String> _excludedEmailMessageIds() => data.purchases
-      .where(
-        (purchase) =>
-            purchase.kind != TransactionKind.transferIn &&
-            purchase.kind != TransactionKind.transferOut,
-      )
-      .map((purchase) => purchase.sourceMessageId)
-      .whereType<String>()
-      .toSet();
+  Set<String> _excludedEmailMessageIds() {
+    final repairWindow = DateTime.now().subtract(const Duration(days: 3));
+    return data.purchases
+        .where(
+          (purchase) =>
+              purchase.purchasedAt.isBefore(repairWindow) &&
+              purchase.kind != TransactionKind.transferIn &&
+              purchase.kind != TransactionKind.transferOut &&
+              !RegExp(
+                r'transfer|transferencia|interaccount|inter-account',
+                caseSensitive: false,
+              ).hasMatch(purchase.subject),
+        )
+        .map((purchase) => purchase.sourceMessageId)
+        .whereType<String>()
+        .toSet();
+  }
 
   @override
   void dispose() {

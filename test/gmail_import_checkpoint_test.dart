@@ -177,4 +177,65 @@ void main() {
       expect(store.data.purchases, hasLength(1));
     },
   );
+
+  test(
+    'repairs a recently saved transfer that was classified as a purchase',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = AppStore(prefs);
+      await store.load();
+      for (final card in const [
+        CreditCard(
+          id: 'bank-a',
+          name: 'Bank A',
+          lastFour: '1111',
+          balance: 1000,
+          creditLimit: 0,
+          apr: 0,
+          cutoffDay: 1,
+          dueDay: 1,
+          minimumDue: 0,
+          accentColor: 0,
+          accountType: AccountType.debit,
+        ),
+        CreditCard(
+          id: 'bank-b',
+          name: 'Bank B',
+          lastFour: '2222',
+          balance: 500,
+          creditLimit: 0,
+          apr: 0,
+          cutoffDay: 1,
+          dueDay: 1,
+          minimumDue: 0,
+          accentColor: 0,
+          accountType: AccountType.debit,
+        ),
+      ]) {
+        await store.upsertCard(card);
+      }
+      final oldPurchase = Purchase(
+        id: 'old',
+        cardId: 'bank-a',
+        merchant: 'Transferencia interna',
+        amount: 100,
+        purchasedAt: DateTime(2026, 9, 20),
+        source: PurchaseSource.email,
+        sourceMessageId: 'same-message',
+      );
+      final repairedTransfer = oldPurchase.copyWith(
+        id: 'repaired',
+        kind: TransactionKind.transferOut,
+        relatedCardId: 'bank-b',
+        category: SpendingCategory.transfers,
+      );
+
+      expect(await store.importPurchases([oldPurchase]), 1);
+      expect(await store.importPurchases([repairedTransfer]), 0);
+      expect(store.data.cardById('bank-a')!.balance, 900);
+      expect(store.data.cardById('bank-b')!.balance, 600);
+      expect(store.data.purchases.single.kind, TransactionKind.transferOut);
+    },
+  );
 }

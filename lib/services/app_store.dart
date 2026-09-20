@@ -145,6 +145,15 @@ class AppStore {
             );
       if (existingMessageIndex != -1) {
         final existing = savedPurchases[existingMessageIndex];
+        // Re-read a notification that an older parser treated as a purchase.
+        // Remove its one-sided effect before applying the two-sided transfer.
+        if (!existing.isTransfer && purchase.isTransfer) {
+          cards = _revertPurchaseFromCards(cards, existing);
+          cards = _applyPurchaseToCards(cards, purchase);
+          savedPurchases[existingMessageIndex] = purchase;
+          changed = true;
+          continue;
+        }
         // A previous version may have saved only the account named in a
         // transfer email. Re-reading it can now apply the missing leg safely.
         if (existing.isTransfer &&
@@ -274,6 +283,56 @@ List<CreditCard> _applyPurchaseToCards(
         ? TransactionKind.transferIn
         : TransactionKind.transferOut;
     updated = update(
+      updated,
+      purchase.relatedCardId!,
+      purchase.copyWith(
+        cardId: purchase.relatedCardId!,
+        kind: oppositeKind,
+        clearRelatedCardId: true,
+      ),
+    );
+  }
+  return updated;
+}
+
+List<CreditCard> _revertPurchaseFromCards(
+  List<CreditCard> cards,
+  Purchase purchase,
+) {
+  List<CreditCard> revert(
+    List<CreditCard> source,
+    String cardId,
+    Purchase transaction,
+  ) => source.map((card) {
+    if (card.id != cardId) return card;
+    final amount = transaction.amount;
+    final balance = card.isDebit
+        ? switch (transaction.kind) {
+            TransactionKind.income ||
+            TransactionKind.transferIn ||
+            TransactionKind.refund => math.max(0, card.balance - amount),
+            TransactionKind.adjustment => card.balance,
+            _ => card.balance + amount,
+          }
+        : switch (transaction.kind) {
+            TransactionKind.cardPayment ||
+            TransactionKind.transferIn ||
+            TransactionKind.refund => card.balance + amount,
+            TransactionKind.adjustment ||
+            TransactionKind.income => card.balance,
+            _ => math.max(0, card.balance - amount),
+          };
+    return card.copyWith(balance: balance);
+  }).toList();
+
+  var updated = revert(cards, purchase.cardId, purchase);
+  if (purchase.isTransfer &&
+      purchase.relatedCardId != null &&
+      purchase.relatedCardId != purchase.cardId) {
+    final oppositeKind = purchase.kind == TransactionKind.transferOut
+        ? TransactionKind.transferIn
+        : TransactionKind.transferOut;
+    updated = revert(
       updated,
       purchase.relatedCardId!,
       purchase.copyWith(

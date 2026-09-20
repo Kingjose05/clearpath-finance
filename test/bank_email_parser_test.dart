@@ -200,4 +200,30 @@ void main() {
     expect(result.single.transferReference, 'ABC-123');
     expect(result.single.counterpartyLastFour, '2222');
   });
+
+  test(
+    'parses an internal transfer with full source and destination accounts',
+    () {
+      final result = parseBankTransactions(
+        bankMessage(
+          from: 'alertas@banreservas.com',
+          subject: 'Transferencia entre cuentas',
+          body: '''
+        Transferencia interna realizada
+        Cuenta origen: 1037111451
+        Cuenta destino: 1021351385
+        Monto: DOP 2,500.00
+        Fecha: 20/09/2026
+        Referencia: ENTRE-2500
+      ''',
+        ),
+      );
+
+      expect(result, hasLength(1));
+      expect(result.single.kind, TransactionKind.transferOut);
+      expect(result.single.lastFour, '1451');
+      expect(result.single.counterpartyLastFour, '1385');
+      expect(result.single.transferReference, 'ENTRE-2500');
+    },
+  );
 }

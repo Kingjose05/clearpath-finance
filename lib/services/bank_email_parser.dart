@@ -222,7 +222,7 @@ String? _cardNumber(String text) {
 
 String? _counterpartyLastFour(String text, String ownLastFour) {
   final labeled = RegExp(
-    r'(?:destino|origen|beneficiario|beneficiary|cuenta destino|cuenta origen|account destination|account origin)[^\n]{0,80}?(?:terminad[ao](?:\s+en)?|ending(?:\s+in)?|[*xX•●]{2,})?\s*[:#-]?\s*(\d{4})(?!\d)',
+    r'(?:destino|origen|beneficiario|beneficiary|cuenta destino|cuenta origen|account destination|account origin|cuenta receptora|cuenta debitada|de la cuenta|desde la cuenta)[^\n]{0,100}?(?:terminad[ao](?:\s+en)?|ending(?:\s+in)?|[*xX•●]{2,})?\s*[:#-]?\s*(\d{4})(?!\d)',
     caseSensitive: false,
   ).allMatches(text);
   for (final match in labeled) {
@@ -234,8 +234,8 @@ String? _counterpartyLastFour(String text, String ownLastFour) {
 
 String? _transferAccountLastFour(String text, TransactionKind kind) {
   final labels = kind == TransactionKind.transferIn
-      ? r'destino|cuenta destino|account destination|destination account|cuenta acreditada'
-      : r'origen|cuenta origen|account origin|source account|cuenta debitada';
+      ? r'destino|cuenta destino|account destination|destination account|cuenta acreditada|cuenta receptora|recibida en'
+      : r'origen|cuenta origen|account origin|source account|cuenta debitada|de la cuenta|desde la cuenta';
   final match = RegExp(
     '(?:$labels)[^\\n]{0,100}?(\\d{4})(?!\\d)',
     caseSensitive: false,
@@ -439,6 +439,10 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
             r'transferencia enviada|transferencia saliente|debito (?:a|en) (?:su )?cuenta|outgoing transfer|ach debit',
           ).hasMatch(context)
         ? TransactionKind.transferOut
+        : RegExp(
+            r'transferencia (?:entre|interna|a (?:otra )?cuenta|hacia)|transfer between|internal transfer|inter-?account',
+          ).hasMatch(context)
+        ? TransactionKind.transferOut
         : RegExp(r'reembolso|devolucion|refund').hasMatch(context)
         ? TransactionKind.refund
         : TransactionKind.purchase;
@@ -600,6 +604,10 @@ List<BankTransaction> parseBankEmailText({
       ? TransactionKind.transferIn
       : RegExp(
           r'transferencia enviada|transferencia saliente|outgoing transfer|ach debit',
+        ).hasMatch(normalized)
+      ? TransactionKind.transferOut
+      : RegExp(
+          r'transferencia (?:entre|interna|a (?:otra )?cuenta|hacia)|transfer between|internal transfer|inter-?account',
         ).hasMatch(normalized)
       ? TransactionKind.transferOut
       : RegExp(r'reembolso|devolucion|refund').hasMatch(normalized)
