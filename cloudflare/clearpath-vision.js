@@ -11,19 +11,21 @@ const statementSchema = {
   type: 'object',
   additionalProperties: false,
   required: [
-    'bankName', 'lastFour', 'accountType', 'availableBalanceDop',
+    'bankName', 'accountName', 'lastFour', 'accountType', 'availableBalanceDop',
     'availableBalanceUsd', 'currentTotalDop', 'statementBalanceDop',
-    'minimumDueDop', 'statementBalanceUsd', 'minimumDueUsd',
+    'currentTotalUsd', 'minimumDueDop', 'statementBalanceUsd', 'minimumDueUsd',
     'installmentBalance', 'installmentMonthlyPayment', 'cutoffDate',
     'dueDate', 'rawText',
   ],
   properties: {
     bankName: { type: 'string' },
+    accountName: { type: 'string' },
     lastFour: { type: 'string' },
     accountType: { type: 'string', enum: ['credit', 'debit'] },
     availableBalanceDop: { type: ['number', 'null'] },
     availableBalanceUsd: { type: ['number', 'null'] },
     currentTotalDop: { type: ['number', 'null'] },
+    currentTotalUsd: { type: ['number', 'null'] },
     statementBalanceDop: { type: ['number', 'null'] },
     minimumDueDop: { type: ['number', 'null'] },
     statementBalanceUsd: { type: ['number', 'null'] },
@@ -69,7 +71,7 @@ export default {
           content: [
             {
               type: 'input_text',
-              text: 'Read this Dominican Republic bank account or card screenshot exactly. Extract only values visibly present. Do not invent values. Treat cuotas/installments separately from revolving credit. For debit or savings/checking accounts use accountType debit; otherwise credit. All DOP and USD amounts are positive numbers without currency symbols. Dates must be YYYY-MM-DD when a full date is shown, otherwise null. rawText should concisely transcribe the relevant labels and values.',
+              text: 'Read this Dominican Republic bank account or card screenshot exactly. Extract only visibly present values; do not infer or invent. bankName is the bank (for example APAP, BHD, Banco Popular); accountName is the visible product/card name plus last four when available. For debit, savings, or checking accounts use accountType debit; otherwise credit. Map "Saldo a la fecha", "Balance a la fecha", "Balance total", or "Total adeudado" to currentTotal in its correct currency. Map "Balance al corte" or "Saldo al corte" only to statementBalance. Map "Pago minimo" only to minimumDue. Map "Disponible" or "Balance disponible" only to availableBalance. Never put a credit limit or available credit into a debt field. Keep DOP and USD values separate. Treat cuotas/installments separately: installmentMonthlyPayment is only a monthly cuota/monto cuota; installmentBalance is only an explicitly stated total outstanding cuotas balance. If the screenshot gives only a monthly cuota, leave installmentBalance null. Dates must be YYYY-MM-DD only when a full date is shown; otherwise null. All amounts are positive numbers without currency symbols. rawText should concisely transcribe the relevant labels and values.',
             },
             { type: 'input_image', image_url: body.image, detail: 'high' },
           ],

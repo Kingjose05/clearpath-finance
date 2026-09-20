@@ -19,6 +19,7 @@ class StatementDraft {
     this.availableBalanceDop,
     this.availableBalanceUsd,
     this.currentTotalDop,
+    this.currentTotalUsd,
     this.statementBalanceDop,
     this.minimumDueDop,
     this.statementBalanceUsd,
@@ -27,6 +28,7 @@ class StatementDraft {
     this.installmentMonthlyPayment,
     this.cutoffDate,
     this.dueDate,
+    this.accountName = '',
   });
 
   final String fileName;
@@ -38,6 +40,7 @@ class StatementDraft {
   final double? availableBalanceDop;
   final double? availableBalanceUsd;
   final double? currentTotalDop;
+  final double? currentTotalUsd;
   final double? statementBalanceDop;
   final double? minimumDueDop;
   final double? statementBalanceUsd;
@@ -46,6 +49,7 @@ class StatementDraft {
   final double? installmentMonthlyPayment;
   final DateTime? cutoffDate;
   final DateTime? dueDate;
+  final String accountName;
 
   bool get hasDop =>
       currentTotalDop != null ||
@@ -54,6 +58,7 @@ class StatementDraft {
       availableBalanceDop != null;
 
   bool get hasUsd =>
+      currentTotalUsd != null ||
       statementBalanceUsd != null ||
       minimumDueUsd != null ||
       availableBalanceUsd != null;
@@ -86,6 +91,9 @@ class StatementDraft {
       bankName: values['bankName'] is String
           ? values['bankName'] as String
           : '',
+      accountName: values['accountName'] is String
+          ? values['accountName'] as String
+          : '',
       lastFour: values['lastFour'] is String
           ? values['lastFour'] as String
           : '',
@@ -95,6 +103,7 @@ class StatementDraft {
       availableBalanceDop: number('availableBalanceDop'),
       availableBalanceUsd: number('availableBalanceUsd'),
       currentTotalDop: number('currentTotalDop'),
+      currentTotalUsd: number('currentTotalUsd'),
       statementBalanceDop: number('statementBalanceDop'),
       minimumDueDop: number('minimumDueDop'),
       statementBalanceUsd: number('statementBalanceUsd'),
@@ -201,6 +210,7 @@ StatementDraft parseStatementText({
         ? usdNumbers.first
         : null,
     currentTotalDop: currentTotalDop,
+    currentTotalUsd: usdNumbers.isEmpty ? null : usdNumbers.first,
     statementBalanceDop: statementBalanceDop,
     minimumDueDop: minimumDueDop,
     statementBalanceUsd: usdNumbers.isEmpty ? null : usdNumbers.first,

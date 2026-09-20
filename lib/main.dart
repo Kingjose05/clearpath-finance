@@ -4681,19 +4681,18 @@ class _StatementCandidate {
         ? draft.minimumDueUsd
         : draft.minimumDueDop;
     final currentTotal = draft.currentTotalDop;
+    final currentTotalForCurrency = currency == 'USD'
+        ? draft.currentTotalUsd
+        : currentTotal;
     final monthlyCuota = currency == 'DOP'
         ? draft.installmentMonthlyPayment ??
               existing?.installmentMonthlyPayment ??
               0
         : 0;
-    final estimatedInstallmentBalance =
-        currency == 'DOP' &&
-            draft.installmentBalance == null &&
-            monthlyCuota > 0 &&
-            currentTotal != null &&
-            draft.statementBalanceDop != null
-        ? math.max(0, currentTotal - draft.statementBalanceDop!)
-        : draft.installmentBalance ?? existing?.installmentBalance ?? 0;
+    // A statement balance minus the current balance is not a reliable cuota
+    // total. Keep cuotas only when the statement explicitly reports them.
+    final installmentBalance =
+        draft.installmentBalance ?? existing?.installmentBalance ?? 0;
     return _StatementCandidate(
       index: index,
       source: draft,
@@ -4701,15 +4700,23 @@ class _StatementCandidate {
       accountType: existing?.accountType ?? draft.accountType,
       name:
           existing?.name ??
-          '${draft.bankName.isEmpty ? 'Imported card' : draft.bankName} $currency',
+          (draft.accountName.isNotEmpty
+              ? draft.accountName
+              : '${draft.bankName.isEmpty ? 'Imported card' : draft.bankName} $currency'),
       lastFour: draft.lastFour.isEmpty
           ? existing?.lastFour ?? ''
           : draft.lastFour,
       balance: draft.accountType == AccountType.debit
-          ? availableBalance ?? currentTotal ?? existing?.balance ?? 0
-          : statementBalance ?? currentTotal ?? existing?.balance ?? 0,
+          ? availableBalance ??
+                currentTotalForCurrency ??
+                existing?.balance ??
+                0
+          : currentTotalForCurrency ??
+                statementBalance ??
+                existing?.balance ??
+                0,
       minimumDue: minimum ?? existing?.minimumDue ?? 0,
-      installmentBalance: estimatedInstallmentBalance.toDouble(),
+      installmentBalance: installmentBalance.toDouble(),
       installmentMonthlyPayment: monthlyCuota.toDouble(),
       cutoffDay: draft.cutoffDate?.day ?? existing?.cutoffDay ?? 1,
       dueDay: draft.dueDate?.day ?? existing?.dueDay ?? 1,
