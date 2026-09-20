@@ -4763,19 +4763,21 @@ class _StatementCandidate {
     // total. Keep cuotas only when the statement explicitly reports them.
     final installmentBalance =
         draft.installmentBalance ?? existing?.installmentBalance ?? 0;
+    final resolvedLastFour = draft.lastFour.isEmpty
+        ? existing?.lastFour ?? ''
+        : draft.lastFour;
+    final importedName = [
+      if (draft.bankName.trim().isNotEmpty) draft.bankName.trim(),
+      if (draft.accountName.trim().isNotEmpty) draft.accountName.trim(),
+      if (resolvedLastFour.isNotEmpty) resolvedLastFour,
+    ].join(' - ');
     return _StatementCandidate(
       index: index,
       source: draft,
       currency: currency,
       accountType: existing?.accountType ?? draft.accountType,
-      name:
-          existing?.name ??
-          (draft.accountName.isNotEmpty
-              ? draft.accountName
-              : '${draft.bankName.isEmpty ? 'Imported card' : draft.bankName} $currency'),
-      lastFour: draft.lastFour.isEmpty
-          ? existing?.lastFour ?? ''
-          : draft.lastFour,
+      name: importedName.isEmpty ? 'Imported account $currency' : importedName,
+      lastFour: resolvedLastFour,
       balance: draft.accountType == AccountType.debit
           ? availableBalance ??
                 currentTotalForCurrency ??
