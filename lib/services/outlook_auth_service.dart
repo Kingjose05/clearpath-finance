@@ -24,6 +24,7 @@ class OutlookAuthService {
     : _storage = storage ?? const FlutterSecureStorage();
 
   static const _tokenKey = 'outlook_access_token';
+  static const _refreshTokenKey = 'outlook_refresh_token';
   static const _expiryKey = 'outlook_access_token_expiry';
   static const _emailKey = 'outlook_account_email';
   static const _clientId = String.fromEnvironment('MICROSOFT_OAUTH_CLIENT_ID');
@@ -40,10 +41,15 @@ class OutlookAuthService {
     final token = await _storage.read(key: _tokenKey, iOptions: _ios);
     final rawExpiry = await _storage.read(key: _expiryKey, iOptions: _ios);
     final expiry = rawExpiry == null ? null : DateTime.tryParse(rawExpiry);
-    return token != null &&
-        token.isNotEmpty &&
-        expiry != null &&
-        expiry.isAfter(DateTime.now().add(const Duration(minutes: 2)));
+    final refreshToken = await _storage.read(
+      key: _refreshTokenKey,
+      iOptions: _ios,
+    );
+    return (token != null &&
+            token.isNotEmpty &&
+            expiry != null &&
+            expiry.isAfter(DateTime.now().add(const Duration(minutes: 2)))) ||
+        (refreshToken != null && refreshToken.isNotEmpty);
   }
 
   Future<String?> connect() async {
@@ -115,6 +121,14 @@ class OutlookAuthService {
       );
     }
     await _storage.write(key: _tokenKey, value: token, iOptions: _ios);
+    final refreshToken = payload['refresh_token']?.toString();
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await _storage.write(
+        key: _refreshTokenKey,
+        value: refreshToken,
+        iOptions: _ios,
+      );
+    }
     await _storage.write(
       key: _expiryKey,
       value: DateTime.now()
@@ -148,13 +162,8 @@ class OutlookAuthService {
     DateTime? until,
     Set<String> excludedMessageIds = const {},
   }) async {
-    final token = await _storage.read(key: _tokenKey, iOptions: _ios);
-    final rawExpiry = await _storage.read(key: _expiryKey, iOptions: _ios);
-    final expiry = rawExpiry == null ? null : DateTime.tryParse(rawExpiry);
-    if (token == null ||
-        token.isEmpty ||
-        expiry == null ||
-        expiry.isBefore(DateTime.now().add(const Duration(minutes: 2)))) {
+    final token = await _usableAccessToken();
+    if (token == null || token.isEmpty) {
       throw const OutlookAuthException(
         'Outlook access expired. Connect Outlook again, then import.',
       );
@@ -168,13 +177,15 @@ class OutlookAuthService {
       query[r'$filter'] =
           'receivedDateTime ge ${since.toUtc().toIso8601String()}';
     }
-    final response = await http.get(
-      Uri.https('graph.microsoft.com', '/v1.0/me/messages', query),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Prefer': 'outlook.body-content-type="text"',
-      },
-    );
+    var response = await _messagesRequest(token, query);
+    // Microsoft can revoke an access token before the stored expiry. Refresh and
+    // retry once so a valid long-lived Outlook connection stays seamless.
+    if (response.statusCode == 401) {
+      final refreshed = await _usableAccessToken(forceRefresh: true);
+      if (refreshed != null && refreshed.isNotEmpty) {
+        response = await _messagesRequest(refreshed, query);
+      }
+    }
     final payload = _body(response);
     if (response.statusCode != 200) {
       throw OutlookAuthException(
@@ -286,6 +297,76 @@ class OutlookAuthService {
     currency: transaction.currency,
     needsReview: true,
   );
+
+  Future<http.Response> _messagesRequest(
+    String token,
+    Map<String, String> query,
+  ) => http.get(
+    Uri.https('graph.microsoft.com', '/v1.0/me/messages', query),
+    headers: {
+      'Authorization': 'Bearer $token',
+      'Prefer': 'outlook.body-content-type="text"',
+    },
+  );
+
+  Future<String?> _usableAccessToken({bool forceRefresh = false}) async {
+    final token = await _storage.read(key: _tokenKey, iOptions: _ios);
+    final rawExpiry = await _storage.read(key: _expiryKey, iOptions: _ios);
+    final expiry = rawExpiry == null ? null : DateTime.tryParse(rawExpiry);
+    if (!forceRefresh &&
+        token != null &&
+        token.isNotEmpty &&
+        expiry != null &&
+        expiry.isAfter(DateTime.now().add(const Duration(minutes: 2)))) {
+      return token;
+    }
+    final refreshToken = await _storage.read(
+      key: _refreshTokenKey,
+      iOptions: _ios,
+    );
+    final clientId = _clientId.isNotEmpty
+        ? _clientId
+        : (kIsWeb ? webMicrosoftClientIdFromPage() : null);
+    if (refreshToken == null || refreshToken.isEmpty || clientId == null) {
+      return null;
+    }
+    final response = await http.post(
+      Uri.parse(_token),
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: {
+        'client_id': clientId,
+        'grant_type': 'refresh_token',
+        'refresh_token': refreshToken,
+        'scope': 'openid profile offline_access User.Read Mail.Read',
+      },
+    );
+    if (response.statusCode != 200) return null;
+    final payload = _body(response);
+    final refreshedToken = payload['access_token']?.toString();
+    if (refreshedToken == null || refreshedToken.isEmpty) return null;
+    await _storage.write(key: _tokenKey, value: refreshedToken, iOptions: _ios);
+    await _storage.write(
+      key: _expiryKey,
+      value: DateTime.now()
+          .add(
+            Duration(
+              seconds:
+                  int.tryParse(payload['expires_in']?.toString() ?? '') ?? 3600,
+            ),
+          )
+          .toIso8601String(),
+      iOptions: _ios,
+    );
+    final nextRefresh = payload['refresh_token']?.toString();
+    if (nextRefresh != null && nextRefresh.isNotEmpty) {
+      await _storage.write(
+        key: _refreshTokenKey,
+        value: nextRefresh,
+        iOptions: _ios,
+      );
+    }
+    return refreshedToken;
+  }
 
   static String _random(int length) {
     const chars =

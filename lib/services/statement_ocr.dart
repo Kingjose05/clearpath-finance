@@ -88,9 +88,27 @@ class StatementDraft {
           : null;
     }
 
+    final rawText = values['rawText'] is String
+        ? values['rawText'] as String
+        : '';
+    final suppliedLastFour = values['lastFour'] is String
+        ? values['lastFour'] as String
+        : '';
+    // Some Dominican banking apps display a full account number rather than a
+    // masked suffix. A six-plus digit number is an identifier here, never a
+    // money value, so its trailing four are safe to use for matching emails.
+    final fullAccountNumber = RegExp(
+      r'(?<!\d)\d{6,}(?!\d)',
+    ).firstMatch('${values['accountName'] ?? ''}\n$rawText');
+    final inferredLastFour = fullAccountNumber == null
+        ? ''
+        : fullAccountNumber
+              .group(0)!
+              .substring(fullAccountNumber.group(0)!.length - 4);
+
     return StatementDraft(
       fileName: fileName,
-      rawText: values['rawText'] is String ? values['rawText'] as String : '',
+      rawText: rawText,
       imageBytes: imageBytes,
       bankName: values['bankName'] is String
           ? values['bankName'] as String
@@ -102,9 +120,9 @@ class StatementDraft {
           (values['associatedDebitCardLastFours'] as List? ?? const [])
               .map((value) => value.toString())
               .toList(),
-      lastFour: values['lastFour'] is String
-          ? values['lastFour'] as String
-          : '',
+      lastFour: suppliedLastFour.isNotEmpty
+          ? suppliedLastFour
+          : inferredLastFour,
       accountType: values['accountType'] == 'debit'
           ? AccountType.debit
           : AccountType.credit,
