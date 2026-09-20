@@ -863,11 +863,21 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   }
 
   CreditCard? _matchingCard(String lastFour, String currency) {
-    if (lastFour.isEmpty) return null;
+    final normalizedLastFour = _normalizedLastFour(lastFour);
+    if (normalizedLastFour.isEmpty) return null;
     for (final card in data.cards) {
-      if (card.lastFour == lastFour && card.currency == currency) return card;
+      if (_normalizedLastFour(card.lastFour) == normalizedLastFour &&
+          card.currency == currency) {
+        return card;
+      }
     }
     return null;
+  }
+
+  String _normalizedLastFour(String value) {
+    final digits = value.replaceAll(RegExp(r'\D'), '');
+    if (digits.length <= 4) return digits;
+    return digits.substring(digits.length - 4);
   }
 
   Future<void> _reviewStatementCandidates(
@@ -1091,7 +1101,14 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     );
     if (submitted != true) return;
     for (final candidate in candidates) {
-      final existing = candidate.existing;
+      final enteredLastFour = _normalizedLastFour(
+        lastFours[candidate.key]!.text,
+      );
+      // Look up again at save time. A matching account may have been created
+      // earlier in this same import batch or corrected in the review form.
+      final existing =
+          _matchingCard(enteredLastFour, candidate.currency) ??
+          candidate.existing;
       final balance = _parseMoney(balances[candidate.key]!.text);
       await widget.store.upsertCard(
         CreditCard(
@@ -1099,7 +1116,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           name: names[candidate.key]!.text.trim().isEmpty
               ? candidate.name
               : names[candidate.key]!.text.trim(),
-          lastFour: lastFours[candidate.key]!.text.trim(),
+          lastFour: enteredLastFour,
           balance: balance,
           creditLimit:
               existing?.creditLimit ??
