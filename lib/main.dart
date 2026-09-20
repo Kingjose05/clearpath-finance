@@ -760,32 +760,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   }
 
   Future<void> _showStatementImportSheet() async {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const PopScope(
-        canPop: false,
-        child: AlertDialog(
-          title: Text('Opening photo picker'),
-          content: Row(
-            children: [
-              SizedBox(
-                height: 22,
-                width: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-              SizedBox(width: 16),
-              Expanded(
-                child: Text('Choose one or more statement screenshots.'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    _snack('Choose a statement screenshot to analyze.');
     final picked = await FilePicker.pickFiles(type: FileType.image);
-    if (mounted) Navigator.of(context, rootNavigator: true).pop();
-    if (picked.isEmpty || !mounted) return;
+    if (picked.isEmpty || !mounted) {
+      if (mounted) _snack('No screenshot was selected.');
+      return;
+    }
 
     final ocr = const StatementOcrService();
     final vision = const StatementVisionService();
