@@ -131,24 +131,45 @@ class AppStore {
   }
 
   Future<int> importPurchases(List<Purchase> purchases) async {
-    final seenMessageIds = _data.purchases
-        .map((purchase) => purchase.sourceMessageId)
-        .whereType<String>()
-        .toSet();
-    final fresh = purchases
-        .where(
-          (purchase) =>
-              purchase.sourceMessageId == null ||
-              !seenMessageIds.contains(purchase.sourceMessageId),
-        )
-        .toList();
-    if (fresh.isEmpty) return 0;
+    if (purchases.isEmpty) return 0;
 
     var cards = [..._data.cards];
     var savedPurchases = [..._data.purchases];
     var logicalImports = 0;
     var changed = false;
-    for (final purchase in fresh) {
+    for (final purchase in purchases) {
+      final existingMessageIndex = purchase.sourceMessageId == null
+          ? -1
+          : savedPurchases.indexWhere(
+              (saved) => saved.sourceMessageId == purchase.sourceMessageId,
+            );
+      if (existingMessageIndex != -1) {
+        final existing = savedPurchases[existingMessageIndex];
+        // A previous version may have saved only the account named in a
+        // transfer email. Re-reading it can now apply the missing leg safely.
+        if (existing.isTransfer &&
+            purchase.isTransfer &&
+            existing.relatedCardId == null &&
+            purchase.relatedCardId != null &&
+            purchase.relatedCardId != existing.cardId) {
+          final oppositeKind = purchase.kind == TransactionKind.transferOut
+              ? TransactionKind.transferIn
+              : TransactionKind.transferOut;
+          cards = _applyPurchaseToCards(
+            cards,
+            purchase.copyWith(
+              cardId: purchase.relatedCardId!,
+              kind: oppositeKind,
+              clearRelatedCardId: true,
+            ),
+          );
+          savedPurchases[existingMessageIndex] = existing.copyWith(
+            relatedCardId: purchase.relatedCardId,
+          );
+          changed = true;
+        }
+        continue;
+      }
       final matchingIndex = _matchingTransferIndex(savedPurchases, purchase);
       if (matchingIndex != -1) {
         final existing = savedPurchases[matchingIndex];

@@ -357,6 +357,16 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         .subtract(const Duration(days: 3));
   }
 
+  Set<String> _excludedEmailMessageIds() => data.purchases
+      .where(
+        (purchase) =>
+            purchase.kind != TransactionKind.transferIn &&
+            purchase.kind != TransactionKind.transferOut,
+      )
+      .map((purchase) => purchase.sourceMessageId)
+      .whereType<String>()
+      .toSet();
+
   @override
   void dispose() {
     widget.emailSync.status.removeListener(_syncStatusChanged);
@@ -2285,10 +2295,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     try {
       final result = await widget.emailSync.connectWithGoogle(
         data.cards,
-        excludedMessageIds: data.purchases
-            .map((purchase) => purchase.sourceMessageId)
-            .whereType<String>()
-            .toSet(),
+        excludedMessageIds: _excludedEmailMessageIds(),
       );
       final imported = await widget.store.importPurchases(result.purchases);
       await widget.store.updateSettings(
@@ -2334,10 +2341,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         discoverCards: true,
         onBatch: _saveEmailBatch,
         since: _incrementalSyncStart(),
-        excludedMessageIds: data.purchases
-            .map((purchase) => purchase.sourceMessageId)
-            .whereType<String>()
-            .toSet(),
+        excludedMessageIds: _excludedEmailMessageIds(),
       );
       await _saveEmailBatch(result);
       final imported = data.purchases.length - previousCount;
@@ -2412,10 +2416,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         data.cards,
         since: since,
         until: until,
-        excludedMessageIds: data.purchases
-            .map((item) => item.sourceMessageId)
-            .whereType<String>()
-            .toSet(),
+        excludedMessageIds: _excludedEmailMessageIds(),
       );
       await _saveEmailBatch(result, allowDiscovery: allowDiscovery);
       final imported = data.purchases.length - previousCount;
@@ -2489,10 +2490,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         since: range.start,
         until: range.end.add(const Duration(days: 1)),
         discoverCards: true,
-        excludedMessageIds: data.purchases
-            .map((purchase) => purchase.sourceMessageId)
-            .whereType<String>()
-            .toSet(),
+        excludedMessageIds: _excludedEmailMessageIds(),
       );
       await _saveEmailBatch(result, allowDiscovery: true);
       final imported = data.purchases.length - previousCount;

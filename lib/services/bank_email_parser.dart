@@ -232,6 +232,17 @@ String? _counterpartyLastFour(String text, String ownLastFour) {
   return null;
 }
 
+String? _transferAccountLastFour(String text, TransactionKind kind) {
+  final labels = kind == TransactionKind.transferIn
+      ? r'destino|cuenta destino|account destination|destination account|cuenta acreditada'
+      : r'origen|cuenta origen|account origin|source account|cuenta debitada';
+  final match = RegExp(
+    '(?:$labels)[^\\n]{0,100}?(\\d{4})(?!\\d)',
+    caseSensitive: false,
+  ).firstMatch(text);
+  return match?.group(1);
+}
+
 String? _transferReference(Map<String, String> fields, String text) {
   final field = _firstField(fields, text, const [
     'referencia',
@@ -463,6 +474,11 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     ]);
     final amount = parseBankAmount(amountText);
     if (amount == null || amount <= 0) continue;
+    final ownLastFour =
+        kind == TransactionKind.transferIn ||
+            kind == TransactionKind.transferOut
+        ? _transferAccountLastFour(text, kind) ?? lastFour
+        : lastFour;
     final transferReference =
         kind == TransactionKind.transferIn ||
             kind == TransactionKind.transferOut
@@ -503,7 +519,7 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
     }
     result.add(
       BankTransaction(
-        lastFour: lastFour,
+        lastFour: ownLastFour,
         bank: bank,
         amount: amount,
         currency: currency,
@@ -524,7 +540,7 @@ List<BankTransaction> parseBankTransactions(gmail.Message message) {
         counterpartyLastFour:
             kind == TransactionKind.transferIn ||
                 kind == TransactionKind.transferOut
-            ? _counterpartyLastFour(text, lastFour)
+            ? _counterpartyLastFour(text, ownLastFour)
             : null,
         category: kind == TransactionKind.withdrawal
             ? SpendingCategory.cash
@@ -589,6 +605,10 @@ List<BankTransaction> parseBankEmailText({
       : RegExp(r'reembolso|devolucion|refund').hasMatch(normalized)
       ? TransactionKind.refund
       : TransactionKind.purchase;
+  final ownLastFour =
+      kind == TransactionKind.transferIn || kind == TransactionKind.transferOut
+      ? _transferAccountLastFour(text, kind) ?? lastFour
+      : lastFour;
   final debit =
       RegExp(
         r'tarjeta (?:de )?debito|debit card|cuenta de ahorro|cuenta corriente|checking|savings',
@@ -627,7 +647,7 @@ List<BankTransaction> parseBankEmailText({
       : 'DOP';
   return [
     BankTransaction(
-      lastFour: lastFour,
+      lastFour: ownLastFour,
       bank: bank,
       amount: amount,
       currency: currency,
@@ -638,6 +658,16 @@ List<BankTransaction> parseBankEmailText({
         r'tarjeta (?:de )?debito|debit card|tarjeta (?:de )?credito|credit card',
       ).hasMatch(normalized),
       kind: kind,
+      transferReference:
+          kind == TransactionKind.transferIn ||
+              kind == TransactionKind.transferOut
+          ? _transferReference(const {}, text)
+          : null,
+      counterpartyLastFour:
+          kind == TransactionKind.transferIn ||
+              kind == TransactionKind.transferOut
+          ? _counterpartyLastFour(text, ownLastFour)
+          : null,
       category: kind == TransactionKind.withdrawal
           ? SpendingCategory.cash
           : kind == TransactionKind.income

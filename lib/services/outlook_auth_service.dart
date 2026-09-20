@@ -212,6 +212,20 @@ class OutlookAuthService {
           knownCards.add(card);
           discovered[card.id] = card;
         }
+        final related = transaction.counterpartyLastFour == null
+            ? null
+            : _matchingCard(
+                knownCards,
+                BankTransaction(
+                  lastFour: transaction.counterpartyLastFour!,
+                  bank: transaction.bank,
+                  amount: transaction.amount,
+                  currency: transaction.currency,
+                  merchant: transaction.merchant,
+                  date: transaction.date,
+                  accountType: AccountType.debit,
+                ),
+              );
         purchases.add(
           Purchase(
             id: newId('outlook'),
@@ -225,6 +239,8 @@ class OutlookAuthService {
             kind: transaction.kind,
             category: transaction.category,
             currency: transaction.currency,
+            transferReference: transaction.transferReference,
+            relatedCardId: related?.id,
           ),
         );
       }
