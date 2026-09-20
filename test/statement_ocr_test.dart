@@ -77,6 +77,37 @@ Saldo disponible DOP 125,000.50''',
     expect(draft.installmentBalance, isNull);
   });
 
+  test('recovers limits from an older AI transcription', () {
+    final draft = StatementDraft.fromVision(
+      fileName: 'banreservas-mastercard.png',
+      values: const {
+        'bankName': 'Banreservas',
+        'accountName': 'Mastercard',
+        'lastFour': '3103',
+        'associatedDebitCardLastFours': [],
+        'accountType': 'credit',
+        'availableBalanceDop': null,
+        'availableBalanceUsd': null,
+        'currentTotalDop': null,
+        'currentTotalUsd': null,
+        'statementBalanceDop': null,
+        'minimumDueDop': null,
+        'statementBalanceUsd': null,
+        'minimumDueUsd': null,
+        'installmentBalance': null,
+        'installmentMonthlyPayment': null,
+        'cutoffDate': null,
+        'dueDate': null,
+        'rawText':
+            'Crédito disponible DOP 35,695.13. Límite DOP 39,000.00. Credimás Disponible DOP 39,000.00.',
+      },
+    );
+
+    expect(draft.availableBalanceDop, 35695.13);
+    expect(draft.creditLimitDop, 39000);
+    expect(draft.installmentCreditLimitDop, 39000);
+  });
+
   test('allocates minimums across cards and loans before APR avalanche', () {
     final cards = [
       CreditCard(

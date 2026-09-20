@@ -103,6 +103,11 @@ class StatementDraft {
     final rawText = values['rawText'] is String
         ? values['rawText'] as String
         : '';
+    // Older Worker deployments can still return a useful transcription while
+    // omitting newer structured fields. Recover those values locally.
+    final textFallback = rawText.isEmpty
+        ? null
+        : parseStatementText(fileName: fileName, text: rawText);
     final suppliedLastFour = values['lastFour'] is String
         ? values['lastFour'] as String
         : '';
@@ -138,22 +143,35 @@ class StatementDraft {
       accountType: values['accountType'] == 'debit'
           ? AccountType.debit
           : AccountType.credit,
-      availableBalanceDop: number('availableBalanceDop'),
-      availableBalanceUsd: number('availableBalanceUsd'),
-      creditLimitDop: number('creditLimitDop'),
-      creditLimitUsd: number('creditLimitUsd'),
-      installmentCreditLimitDop: number('installmentCreditLimitDop'),
-      installmentCreditLimitUsd: number('installmentCreditLimitUsd'),
-      currentTotalDop: number('currentTotalDop'),
-      currentTotalUsd: number('currentTotalUsd'),
-      statementBalanceDop: number('statementBalanceDop'),
-      minimumDueDop: number('minimumDueDop'),
-      statementBalanceUsd: number('statementBalanceUsd'),
-      minimumDueUsd: number('minimumDueUsd'),
-      installmentBalance: number('installmentBalance'),
-      installmentMonthlyPayment: number('installmentMonthlyPayment'),
-      cutoffDate: date('cutoffDate'),
-      dueDate: date('dueDate'),
+      availableBalanceDop:
+          number('availableBalanceDop') ?? textFallback?.availableBalanceDop,
+      availableBalanceUsd:
+          number('availableBalanceUsd') ?? textFallback?.availableBalanceUsd,
+      creditLimitDop: number('creditLimitDop') ?? textFallback?.creditLimitDop,
+      creditLimitUsd: number('creditLimitUsd') ?? textFallback?.creditLimitUsd,
+      installmentCreditLimitDop:
+          number('installmentCreditLimitDop') ??
+          textFallback?.installmentCreditLimitDop,
+      installmentCreditLimitUsd:
+          number('installmentCreditLimitUsd') ??
+          textFallback?.installmentCreditLimitUsd,
+      currentTotalDop:
+          number('currentTotalDop') ?? textFallback?.currentTotalDop,
+      currentTotalUsd:
+          number('currentTotalUsd') ?? textFallback?.currentTotalUsd,
+      statementBalanceDop:
+          number('statementBalanceDop') ?? textFallback?.statementBalanceDop,
+      minimumDueDop: number('minimumDueDop') ?? textFallback?.minimumDueDop,
+      statementBalanceUsd:
+          number('statementBalanceUsd') ?? textFallback?.statementBalanceUsd,
+      minimumDueUsd: number('minimumDueUsd') ?? textFallback?.minimumDueUsd,
+      installmentBalance:
+          number('installmentBalance') ?? textFallback?.installmentBalance,
+      installmentMonthlyPayment:
+          number('installmentMonthlyPayment') ??
+          textFallback?.installmentMonthlyPayment,
+      cutoffDate: date('cutoffDate') ?? textFallback?.cutoffDate,
+      dueDate: date('dueDate') ?? textFallback?.dueDate,
       analysisSource: StatementAnalysisSource.ai,
     );
   }
@@ -201,6 +219,9 @@ StatementDraft parseStatementText({
   final availableBalanceDop = _amountAfter(normalized, [
     'available balance',
     'available funds',
+    'credit available',
+    'credito disponible',
+    'crédito disponible',
     'saldo disponible',
     'balance disponible',
     'balance actual',
@@ -245,8 +266,6 @@ StatementDraft parseStatementText({
     'monthly installment',
     'cuota mensual',
     'cuota a pagar',
-    'mas limite',
-    'más limite',
   ]);
   final installmentBalance = _amountAfter(normalized, [
     'installment balance',
@@ -326,7 +345,7 @@ String _lastFour(String text) {
 
 double? _amountAfter(String text, List<String> labels) {
   for (final label in labels) {
-    final escaped = RegExp.escape(label);
+    final escaped = RegExp.escape(label).replaceAll(r'\ ', r'\s+');
     final match = RegExp(
       '$escaped[^\\d]{0,36}([\\d.,]+)',
       caseSensitive: false,
