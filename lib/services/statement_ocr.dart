@@ -346,12 +346,15 @@ String _lastFour(String text) {
 double? _amountAfter(String text, List<String> labels) {
   final searchable = _foldStatementText(text);
   for (final label in labels) {
-    final escaped = _foldStatementText(
-      label,
-    ).split(' ').map(RegExp.escape).join(r'\s+');
-    final match = RegExp(
-      '$escaped[^\\d]{0,36}([\\d.,]+)',
-    ).firstMatch(searchable);
+    final normalizedLabel = _foldStatementText(label);
+    final labelIndex = searchable.indexOf(normalizedLabel);
+    if (labelIndex < 0) continue;
+    final start = labelIndex + normalizedLabel.length;
+    final afterLabel = searchable.substring(
+      start,
+      (start + 48).clamp(0, searchable.length),
+    );
+    final match = RegExp(r'[\d][\d.,]*').firstMatch(afterLabel);
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
       if (amount != null) return amount;
