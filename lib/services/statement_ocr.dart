@@ -356,7 +356,7 @@ double? _amountAfter(String text, List<String> labels) {
     );
     final match = RegExp(r'[\d][\d.,]*').firstMatch(afterLabel);
     if (match != null) {
-      final amount = _parseAmount(match.group(1)!);
+      final amount = _parseAmount(match.group(0)!);
       if (amount != null) return amount;
     }
   }
