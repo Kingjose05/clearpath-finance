@@ -344,12 +344,14 @@ String _lastFour(String text) {
 }
 
 double? _amountAfter(String text, List<String> labels) {
+  final searchable = _foldStatementText(text);
   for (final label in labels) {
-    final escaped = label.split(' ').map(RegExp.escape).join(r'\s+');
+    final escaped = _foldStatementText(
+      label,
+    ).split(' ').map(RegExp.escape).join(r'\s+');
     final match = RegExp(
       '$escaped[^\\d]{0,36}([\\d.,]+)',
-      caseSensitive: false,
-    ).firstMatch(text);
+    ).firstMatch(searchable);
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
       if (amount != null) return amount;
@@ -357,6 +359,16 @@ double? _amountAfter(String text, List<String> labels) {
   }
   return null;
 }
+
+String _foldStatementText(String value) => value
+    .toLowerCase()
+    .replaceAll('á', 'a')
+    .replaceAll('é', 'e')
+    .replaceAll('í', 'i')
+    .replaceAll('ó', 'o')
+    .replaceAll('ú', 'u')
+    .replaceAll('ü', 'u')
+    .replaceAll(RegExp(r'\s+'), ' ');
 
 List<double> _currencyAmounts(String text, String currency) {
   final prefixed = RegExp(
