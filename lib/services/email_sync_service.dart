@@ -672,7 +672,7 @@ CreditCard? _firstCardWithLastFour(
   String? currency,
 }) {
   for (final card in cards) {
-    if (card.lastFour == lastFour &&
+    if (card.matchesIdentifier(lastFour) &&
         (accountType == null || card.accountType == accountType) &&
         (currency == null || card.currency == currency)) {
       return card;

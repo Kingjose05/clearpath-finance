@@ -244,7 +244,7 @@ class OutlookAuthService {
     BankTransaction transaction,
   ) {
     for (final card in cards) {
-      if (card.lastFour == transaction.lastFour &&
+      if (card.matchesIdentifier(transaction.lastFour) &&
           card.currency == transaction.currency &&
           card.accountType == transaction.accountType) {
         return card;

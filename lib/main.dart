@@ -359,13 +359,42 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     super.dispose();
   }
 
-  Future<void> _saveEmailBatch(EmailSyncResult result) async {
-    for (final card in result.discoveredCards) {
-      if (!data.cards.any((existing) => existing.id == card.id)) {
-        await widget.store.upsertCard(card);
+  Future<void> _saveEmailBatch(
+    EmailSyncResult result, {
+    bool allowDiscovery = false,
+  }) async {
+    final knownCards = data.cards;
+    final remappedPurchases = result.purchases
+        .map((purchase) {
+          final discovered = result.discoveredCards.where(
+            (card) => card.id == purchase.cardId,
+          );
+          final source = discovered.isEmpty ? null : discovered.first;
+          final matching = source == null
+              ? knownCards.where((card) => card.id == purchase.cardId)
+              : knownCards.where(
+                  (card) =>
+                      card.currency == source.currency &&
+                      card.accountType == source.accountType &&
+                      card.matchesIdentifier(source.lastFour),
+                );
+          if (matching.isEmpty) return purchase;
+          return purchase.copyWith(cardId: matching.first.id);
+        })
+        .where(
+          (purchase) =>
+              allowDiscovery ||
+              knownCards.any((card) => card.id == purchase.cardId),
+        )
+        .toList();
+    if (allowDiscovery) {
+      for (final card in result.discoveredCards) {
+        if (!data.cards.any((existing) => existing.id == card.id)) {
+          await widget.store.upsertCard(card);
+        }
       }
     }
-    await widget.store.importPurchases(result.purchases);
+    await widget.store.importPurchases(remappedPurchases);
     if (data.settings.monthlySalary <= 0) {
       final detectedIncome = result.purchases
           .where((item) => item.kind == TransactionKind.income)
@@ -435,6 +464,8 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         onEditCard: _showCardSheet,
         onAddCard: () => _showCardSheet(),
         onImportStatements: _showStatementImportSheet,
+        onSyncEmail: _syncEmail,
+        syncing: _syncing,
         onEditLoan: _showLoanSheet,
         onAddLoan: () => _showLoanSheet(),
       ),
@@ -725,7 +756,31 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   }
 
   Future<void> _showStatementImportSheet() async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: Text('Opening photo picker'),
+          content: Row(
+            children: [
+              SizedBox(
+                height: 22,
+                width: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 16),
+              Expanded(
+                child: Text('Choose one or more statement screenshots.'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
     final picked = await FilePicker.pickFiles(type: FileType.image);
+    if (mounted) Navigator.of(context, rootNavigator: true).pop();
     if (picked.isEmpty || !mounted) return;
 
     final ocr = const StatementOcrService();
@@ -926,6 +981,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     final types = {
       for (final candidate in candidates) candidate.key: candidate.accountType,
     };
+    final associatedDebitCards = {
+      for (final candidate in candidates)
+        candidate.key: TextEditingController(
+          text: candidate.source.associatedDebitCardLastFours.join(', '),
+        ),
+    };
     final submitted = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -1037,6 +1098,16 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                   label: 'Minimum payment (${candidate.currency})',
                 ),
               ],
+              if (types[candidate.key] == AccountType.debit) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: associatedDebitCards[candidate.key],
+                  keyboardType: TextInputType.text,
+                  decoration: const InputDecoration(
+                    labelText: 'Associated debit-card last four',
+                  ),
+                ),
+              ],
               if (types[candidate.key] == AccountType.credit &&
                   candidate.currency == 'DOP') ...[
                 const SizedBox(height: 10),
@@ -1110,9 +1181,19 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           _matchingCard(enteredLastFour, candidate.currency) ??
           candidate.existing;
       final balance = _parseMoney(balances[candidate.key]!.text);
+      final accountId = existing?.id ?? newId('card');
+      final debitCardIdentifiers = types[candidate.key] == AccountType.debit
+          ? {
+              ...?existing?.associatedDebitCardLastFours,
+              ...associatedDebitCards[candidate.key]!.text
+                  .split(',')
+                  .map(_normalizedLastFour)
+                  .where((value) => value.length == 4),
+            }.toList()
+          : const <String>[];
       await widget.store.upsertCard(
         CreditCard(
-          id: existing?.id ?? newId('card'),
+          id: accountId,
           name: names[candidate.key]!.text.trim().isEmpty
               ? candidate.name
               : names[candidate.key]!.text.trim(),
@@ -1135,6 +1216,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
               existing?.reminderDaysBefore ??
               data.settings.defaultReminderDaysBefore,
           emailMatchTerms: existing?.emailMatchTerms ?? const [],
+          associatedDebitCardLastFours: debitCardIdentifiers,
           accountType: types[candidate.key]!,
           currency: candidate.currency,
           installmentBalance:
@@ -1151,6 +1233,10 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           calibratedDueDate: candidate.source.dueDate,
           needsReview: false,
         ),
+      );
+      await widget.store.linkDebitCardIdentifiers(
+        accountId,
+        debitCardIdentifiers,
       );
     }
     await widget.store.updateSettings(
@@ -1169,6 +1255,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       ...installmentPayments.values,
       ...cutoffs.values,
       ...dues.values,
+      ...associatedDebitCards.values,
     ]) {
       controller.dispose();
     }
@@ -1419,6 +1506,9 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     final terms = TextEditingController(
       text: card?.emailMatchTerms.join(', ') ?? '',
     );
+    final associatedDebitCards = TextEditingController(
+      text: card?.associatedDebitCardLastFours.join(', ') ?? '',
+    );
     var accent = card?.accentColor ?? _teal.toARGB32();
     var accountType = card?.accountType ?? AccountType.credit;
     var currency = card?.currency ?? 'DOP';
@@ -1440,12 +1530,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         return StatefulBuilder(
           builder: (context, setLocalState) {
             return _SheetFrame(
-              title: isNew ? 'Add card' : 'Edit card',
+              title: isNew ? 'Add account' : 'Edit account',
               children: [
                 TextField(
                   controller: name,
                   textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(labelText: 'Card name'),
+                  decoration: const InputDecoration(labelText: 'Account name'),
                 ),
                 const SizedBox(height: 12),
                 SegmentedButton<AccountType>(
@@ -1491,6 +1581,15 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                 const SizedBox(height: 12),
                 if (accountType == AccountType.debit)
                   _MoneyField(controller: balance, label: 'Available balance'),
+                if (accountType == AccountType.debit)
+                  const SizedBox(height: 12),
+                if (accountType == AccountType.debit)
+                  TextField(
+                    controller: associatedDebitCards,
+                    decoration: const InputDecoration(
+                      labelText: 'Associated debit-card last four',
+                    ),
+                  ),
                 if (accountType == AccountType.debit)
                   const SizedBox(height: 12),
                 if (accountType == AccountType.credit)
@@ -1596,7 +1695,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
                 FilledButton.icon(
                   onPressed: () => Navigator.pop(context, true),
                   icon: const Icon(Icons.save_outlined),
-                  label: Text(isNew ? 'Add card' : 'Save card'),
+                  label: Text(isNew ? 'Add account' : 'Save account'),
                 ),
               ],
             );
@@ -1606,9 +1705,18 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     );
 
     if (submitted != true || name.text.trim().isEmpty) return;
+    final accountId = card?.id ?? newId('card');
+    final debitCardIdentifiers = accountType == AccountType.debit
+        ? associatedDebitCards.text
+              .split(',')
+              .map(_normalizedLastFour)
+              .where((value) => value.length == 4)
+              .toSet()
+              .toList()
+        : const <String>[];
     await widget.store.upsertCard(
       CreditCard(
-        id: card?.id ?? newId('card'),
+        id: accountId,
         name: name.text.trim(),
         lastFour: lastFour.text.trim(),
         balance: _parseMoney(balance.text),
@@ -1625,6 +1733,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
             .map((term) => term.trim())
             .where((term) => term.isNotEmpty)
             .toList(),
+        associatedDebitCardLastFours: debitCardIdentifiers,
         accountType: accountType,
         currency: currency,
         installmentBalance: accountType == AccountType.credit
@@ -1636,9 +1745,13 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         needsReview: false,
       ),
     );
+    await widget.store.linkDebitCardIdentifiers(
+      accountId,
+      debitCardIdentifiers,
+    );
     await _saveAndRefresh();
     if (!mounted) return;
-    _snack(isNew ? 'Card added.' : 'Card saved.');
+    _snack(isNew ? 'Account added.' : 'Account saved.');
   }
 
   Future<void> _showLoanSheet([Loan? loan]) async {
@@ -2147,10 +2260,15 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     await _syncOutlook(
       since: range.start,
       until: range.end.add(const Duration(days: 1)),
+      allowDiscovery: true,
     );
   }
 
-  Future<void> _syncOutlook({DateTime? since, DateTime? until}) async {
+  Future<void> _syncOutlook({
+    DateTime? since,
+    DateTime? until,
+    bool allowDiscovery = false,
+  }) async {
     if (_syncing) return;
     setState(() => _syncing = true);
     try {
@@ -2164,7 +2282,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
             .whereType<String>()
             .toSet(),
       );
-      await _saveEmailBatch(result);
+      await _saveEmailBatch(result, allowDiscovery: allowDiscovery);
       final imported = data.purchases.length - previousCount;
       await widget.store.updateSettings(
         data.settings.copyWith(
@@ -2241,7 +2359,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
             .whereType<String>()
             .toSet(),
       );
-      await _saveEmailBatch(result);
+      await _saveEmailBatch(result, allowDiscovery: true);
       final imported = data.purchases.length - previousCount;
       await widget.store.updateSettings(
         widget.store.data.settings.copyWith(
@@ -2700,6 +2818,31 @@ class _DashboardHero extends StatelessWidget {
               ),
             ],
           ),
+          if (data.settings.emailSyncEnabled) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: syncing ? null : onSyncEmail,
+                icon: syncing
+                    ? const SizedBox(
+                        height: 17,
+                        width: 17,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.sync),
+                label: Text(
+                  syncing
+                      ? 'Updating current balances...'
+                      : 'Sync current balances',
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.42)),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -3100,6 +3243,8 @@ class CardsView extends StatelessWidget {
     required this.onEditCard,
     required this.onAddCard,
     required this.onImportStatements,
+    required this.onSyncEmail,
+    required this.syncing,
     required this.onEditLoan,
     required this.onAddLoan,
   });
@@ -3108,6 +3253,8 @@ class CardsView extends StatelessWidget {
   final ValueChanged<CreditCard> onEditCard;
   final VoidCallback onAddCard;
   final VoidCallback onImportStatements;
+  final VoidCallback onSyncEmail;
+  final bool syncing;
   final ValueChanged<Loan> onEditLoan;
   final VoidCallback onAddLoan;
 
@@ -3129,6 +3276,18 @@ class CardsView extends StatelessWidget {
           onPressed: onImportStatements,
           icon: const Icon(Icons.document_scanner_outlined),
           label: const Text('Import or update from screenshots'),
+        ),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          onPressed: syncing ? null : onSyncEmail,
+          icon: syncing
+              ? const SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.sync),
+          label: Text(syncing ? 'Updating from email...' : 'Update from email'),
         ),
         const SizedBox(height: 12),
         if (data.cards.isEmpty)
@@ -3279,6 +3438,18 @@ class _CardDetailPanel extends StatelessWidget {
                     ),
                   ],
                 ),
+              if (card.isDebit &&
+                  card.associatedDebitCardLastFours.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Debit cards: ${card.associatedDebitCardLastFours.map((value) => '•••• $value').join('  ')}',
+                  style: const TextStyle(
+                    color: _muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

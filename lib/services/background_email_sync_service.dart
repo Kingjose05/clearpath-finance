@@ -109,12 +109,25 @@ Future<int> runDailySyncIfDue({bool force = false}) async {
           .whereType<String>()
           .toSet(),
     );
-    for (final card in result.discoveredCards) {
-      if (!store.data.cards.any((existing) => existing.id == card.id)) {
-        await store.upsertCard(card);
+    // Once a user has calibrated statement balances, background refresh must
+    // only update those known accounts. It must not create surprise accounts
+    // from an unfamiliar email suffix.
+    final allowDiscovery = settings.lastCalibrationAt == null;
+    if (allowDiscovery) {
+      for (final card in result.discoveredCards) {
+        if (!store.data.cards.any((existing) => existing.id == card.id)) {
+          await store.upsertCard(card);
+        }
       }
     }
-    final imported = await store.importPurchases(result.purchases);
+    final knownIds = store.data.cards.map((card) => card.id).toSet();
+    final imported = await store.importPurchases(
+      result.purchases
+          .where(
+            (purchase) => allowDiscovery || knownIds.contains(purchase.cardId),
+          )
+          .toList(),
+    );
     final refreshedData = store.data;
     await store.updateSettings(
       refreshedData.settings.copyWith(

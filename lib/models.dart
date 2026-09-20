@@ -136,6 +136,7 @@ class CreditCard {
     this.lastPaymentDate,
     this.reminderDaysBefore = 3,
     this.emailMatchTerms = const [],
+    this.associatedDebitCardLastFours = const [],
     this.accountType = AccountType.credit,
     this.currency = 'DOP',
     this.installmentBalance = 0,
@@ -158,6 +159,10 @@ class CreditCard {
   final DateTime? lastPaymentDate;
   final int reminderDaysBefore;
   final List<String> emailMatchTerms;
+
+  /// Debit-card numbers that spend from this debit/checking account.
+  /// They are identifiers only; they never represent a second balance.
+  final List<String> associatedDebitCardLastFours;
   final AccountType accountType;
   final String currency;
   final double installmentBalance;
@@ -169,6 +174,16 @@ class CreditCard {
   bool get isCredit => accountType == AccountType.credit;
   bool get isDebit => accountType == AccountType.debit;
   double get totalOwed => isCredit ? balance + installmentBalance : 0;
+
+  bool matchesIdentifier(String value) {
+    final normalized = _lastFourDigits(value);
+    if (normalized.isEmpty) return false;
+    return _lastFourDigits(lastFour) == normalized ||
+        (isDebit &&
+            associatedDebitCardLastFours.any(
+              (identifier) => _lastFourDigits(identifier) == normalized,
+            ));
+  }
 
   double get utilization {
     if (creditLimit <= 0) return 0;
@@ -211,6 +226,7 @@ class CreditCard {
     bool clearLastPaymentDate = false,
     int? reminderDaysBefore,
     List<String>? emailMatchTerms,
+    List<String>? associatedDebitCardLastFours,
     AccountType? accountType,
     String? currency,
     double? installmentBalance,
@@ -236,6 +252,8 @@ class CreditCard {
           : lastPaymentDate ?? this.lastPaymentDate,
       reminderDaysBefore: reminderDaysBefore ?? this.reminderDaysBefore,
       emailMatchTerms: emailMatchTerms ?? this.emailMatchTerms,
+      associatedDebitCardLastFours:
+          associatedDebitCardLastFours ?? this.associatedDebitCardLastFours,
       accountType: accountType ?? this.accountType,
       currency: currency ?? this.currency,
       installmentBalance: installmentBalance ?? this.installmentBalance,
@@ -265,6 +283,7 @@ class CreditCard {
     'lastPaymentDate': lastPaymentDate?.toIso8601String(),
     'reminderDaysBefore': reminderDaysBefore,
     'emailMatchTerms': emailMatchTerms,
+    'associatedDebitCardLastFours': associatedDebitCardLastFours,
     'accountType': accountType.name,
     'currency': currency,
     'installmentBalance': installmentBalance,
@@ -293,6 +312,10 @@ class CreditCard {
       emailMatchTerms: (json['emailMatchTerms'] as List<dynamic>? ?? const [])
           .map((term) => term.toString())
           .toList(),
+      associatedDebitCardLastFours:
+          (json['associatedDebitCardLastFours'] as List<dynamic>? ?? const [])
+              .map((identifier) => identifier.toString())
+              .toList(),
       accountType: AccountType.fromJson(json['accountType'] as String?),
       currency: json['currency'] as String? ?? 'DOP',
       installmentBalance: moneyFromJson(json['installmentBalance']),
@@ -308,6 +331,12 @@ class CreditCard {
           : null,
     );
   }
+}
+
+String _lastFourDigits(String value) {
+  final digits = value.replaceAll(RegExp(r'\D'), '');
+  if (digits.length <= 4) return digits;
+  return digits.substring(digits.length - 4);
 }
 
 class Purchase {

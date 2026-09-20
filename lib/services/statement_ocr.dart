@@ -29,6 +29,7 @@ class StatementDraft {
     this.cutoffDate,
     this.dueDate,
     this.accountName = '',
+    this.associatedDebitCardLastFours = const [],
     this.analysisSource = StatementAnalysisSource.ocr,
   });
 
@@ -51,6 +52,7 @@ class StatementDraft {
   final DateTime? cutoffDate;
   final DateTime? dueDate;
   final String accountName;
+  final List<String> associatedDebitCardLastFours;
   final StatementAnalysisSource analysisSource;
 
   bool get hasDop =>
@@ -96,6 +98,10 @@ class StatementDraft {
       accountName: values['accountName'] is String
           ? values['accountName'] as String
           : '',
+      associatedDebitCardLastFours:
+          (values['associatedDebitCardLastFours'] as List? ?? const [])
+              .map((value) => value.toString())
+              .toList(),
       lastFour: values['lastFour'] is String
           ? values['lastFour'] as String
           : '',

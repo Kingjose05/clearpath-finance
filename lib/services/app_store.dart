@@ -64,6 +64,51 @@ class AppStore {
     await save();
   }
 
+  Future<void> linkDebitCardIdentifiers(
+    String accountId,
+    Iterable<String> identifiers,
+  ) async {
+    final account = _data.cards.where((card) => card.id == accountId);
+    if (account.isEmpty || !account.first.isDebit) return;
+    final parent = account.first;
+    final linked = identifiers
+        .map(_lastFour)
+        .where((value) => value.length == 4)
+        .toSet();
+    if (linked.isEmpty) return;
+
+    final duplicateIds = _data.cards
+        .where(
+          (card) =>
+              card.id != parent.id &&
+              card.isDebit &&
+              card.currency == parent.currency &&
+              linked.any(card.matchesIdentifier),
+        )
+        .map((card) => card.id)
+        .toSet();
+    if (duplicateIds.isEmpty) return;
+
+    _data = _data.copyWith(
+      cards: _data.cards
+          .where((card) => !duplicateIds.contains(card.id))
+          .toList(),
+      purchases: _data.purchases
+          .map(
+            (purchase) => purchase.copyWith(
+              cardId: duplicateIds.contains(purchase.cardId)
+                  ? parent.id
+                  : purchase.cardId,
+              relatedCardId: duplicateIds.contains(purchase.relatedCardId)
+                  ? parent.id
+                  : purchase.relatedCardId,
+            ),
+          )
+          .toList(),
+    );
+    await save();
+  }
+
   Future<void> upsertLoan(Loan loan) async {
     final loans = [..._data.loans];
     final index = loans.indexWhere((item) => item.id == loan.id);
@@ -218,6 +263,12 @@ List<CreditCard> _applyPurchaseToCards(
     );
   }
   return updated;
+}
+
+String _lastFour(String value) {
+  final digits = value.replaceAll(RegExp(r'\D'), '');
+  if (digits.length <= 4) return digits;
+  return digits.substring(digits.length - 4);
 }
 
 int _matchingTransferIndex(List<Purchase> purchases, Purchase candidate) {
