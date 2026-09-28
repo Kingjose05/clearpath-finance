@@ -12,6 +12,7 @@ import 'app_store.dart';
 import 'bank_email_parser.dart';
 import 'email_sync_service.dart';
 import 'oauth_popup.dart';
+import 'outlook_graph_pager.dart';
 
 class OutlookAuthException implements Exception {
   const OutlookAuthException(this.message);
@@ -38,6 +39,7 @@ class OutlookAuthService {
     accessibility: KeychainAccessibility.first_unlock_this_device,
   );
   final FlutterSecureStorage _storage;
+  final status = ValueNotifier<String>('');
 
   Future<bool> hasAccess() async {
     final token = await _storage.read(key: _tokenKey, iOptions: _ios);
@@ -163,7 +165,9 @@ class OutlookAuthService {
     DateTime? since,
     DateTime? until,
     Set<String> excludedMessageIds = const {},
+    Future<void> Function(EmailSyncResult)? onBatch,
   }) async {
+    status.value = 'Checking Outlook connection...';
     final token = await _usableAccessToken();
     if (token == null || token.isEmpty) {
       throw const OutlookAuthException(
@@ -171,7 +175,7 @@ class OutlookAuthService {
       );
     }
     final query = <String, String>{
-      r'$top': '100',
+      r'$top': '50',
       r'$select': 'id,subject,from,receivedDateTime,body',
       r'$orderby': 'receivedDateTime desc',
     };
@@ -179,93 +183,156 @@ class OutlookAuthService {
       query[r'$filter'] =
           'receivedDateTime ge ${since.toUtc().toIso8601String()}';
     }
-    var response = await _messagesRequest(token, query);
-    // Microsoft can revoke an access token before the stored expiry. Refresh and
-    // retry once so a valid long-lived Outlook connection stays seamless.
-    if (response.statusCode == 401) {
-      final refreshed = await _usableAccessToken(forceRefresh: true);
-      if (refreshed != null && refreshed.isNotEmpty) {
-        response = await _messagesRequest(refreshed, query);
-      }
-    }
-    final payload = _body(response);
-    if (response.statusCode != 200) {
-      throw OutlookAuthException(
-        payload['error']?['message']?.toString() ??
-            'Outlook could not read messages.',
-      );
+    if (until != null) {
+      final upper = 'receivedDateTime lt ${until.toUtc().toIso8601String()}';
+      query[r'$filter'] = query.containsKey(r'$filter')
+          ? '${query[r'$filter']} and $upper'
+          : upper;
     }
     final knownCards = [...cards];
     final discovered = <String, CreditCard>{};
     final purchases = <Purchase>[];
-    for (final raw in (payload['value'] as List? ?? const [])) {
-      final message = Map<String, dynamic>.from(raw as Map);
-      final id = message['id']?.toString();
-      if (id == null || excludedMessageIds.contains(id)) continue;
-      final received =
-          DateTime.tryParse(message['receivedDateTime']?.toString() ?? '') ??
-          DateTime.now();
-      if (until != null && received.isAfter(until)) continue;
-      final sender =
-          ((message['from'] as Map?)?['emailAddress'] as Map?)?['address']
-              ?.toString() ??
-          '';
-      final subject = message['subject']?.toString() ?? '';
-      final body = ((message['body'] as Map?)?['content']?.toString() ?? '');
-      final transactions = parseBankEmailText(
-        sender: sender,
-        subject: subject,
-        text: body,
-        fallback: received,
-      );
-      for (final transaction in transactions) {
-        final card =
-            _matchingCard(knownCards, transaction) ?? _newCard(transaction);
-        if (!knownCards.any((item) => item.id == card.id)) {
-          knownCards.add(card);
-          discovered[card.id] = card;
-        }
-        final related = transaction.counterpartyLastFour == null
-            ? null
-            : _matchingCard(
-                knownCards,
-                BankTransaction(
-                  lastFour: transaction.counterpartyLastFour!,
-                  bank: transaction.bank,
-                  amount: transaction.amount,
-                  currency: transaction.currency,
-                  merchant: transaction.merchant,
-                  date: transaction.date,
-                  accountType: AccountType.debit,
-                ),
-              );
-        purchases.add(
-          Purchase(
-            id: newId('outlook'),
-            cardId: card.id,
-            merchant: transaction.merchant,
-            amount: transaction.amount,
-            purchasedAt: transaction.date,
-            source: PurchaseSource.email,
-            subject: subject,
-            sourceMessageId: id,
-            kind: transaction.kind,
-            category: transaction.category,
-            currency: transaction.currency,
-            transferReference: transaction.transferReference,
-            relatedCardId: related?.id,
-          ),
-        );
-      }
-    }
     final email = await _storage.read(key: _emailKey, iOptions: _ios);
+    var checked = 0;
+    var accessToken = token;
+    final total = await forEachOutlookMessagePage(
+      firstPage: Uri.https('graph.microsoft.com', '/v1.0/me/messages', query),
+      fetch: (uri) async {
+        for (var attempt = 0; ; attempt++) {
+          status.value = 'Reading Outlook emails ($checked checked)...';
+          var response = await _messagesRequest(accessToken, uri);
+          if (response.statusCode == 401) {
+            final refreshed = await _usableAccessToken(forceRefresh: true);
+            if (refreshed == null || refreshed.isEmpty) {
+              throw const OutlookAuthException(
+                'Outlook access expired. Connect Outlook again, then sync.',
+              );
+            }
+            accessToken = refreshed;
+            response = await _messagesRequest(accessToken, uri);
+          }
+          if ((response.statusCode == 429 || response.statusCode == 503) &&
+              attempt < 3) {
+            final suggested = int.tryParse(
+              response.headers['retry-after'] ?? '',
+            );
+            final seconds = (suggested ?? (2 << attempt)).clamp(1, 30);
+            status.value = 'Outlook is busy. Retrying in $seconds seconds...';
+            await Future<void>.delayed(Duration(seconds: seconds));
+            continue;
+          }
+          return response;
+        }
+      },
+      onPage: (messages, page) async {
+        final pagePurchases = <Purchase>[];
+        final pageCards = <CreditCard>[];
+        for (final message in messages) {
+          final before = discovered.length;
+          final parsed = _parseOutlookMessage(
+            message,
+            knownCards,
+            discovered,
+            excludedMessageIds,
+            until,
+          );
+          pagePurchases.addAll(parsed);
+          purchases.addAll(parsed);
+          if (discovered.length > before) {
+            pageCards.addAll(discovered.values.skip(before));
+          }
+        }
+        checked += messages.length;
+        status.value =
+            '$checked Outlook emails checked; ${purchases.length} bank transactions found';
+        if (onBatch != null &&
+            (pagePurchases.isNotEmpty || pageCards.isNotEmpty)) {
+          await onBatch(
+            EmailSyncResult(
+              accountEmail: email,
+              purchases: pagePurchases,
+              discoveredCards: pageCards,
+              message: status.value,
+            ),
+          );
+        }
+      },
+    );
     return EmailSyncResult(
       accountEmail: email,
       purchases: purchases,
       discoveredCards: discovered.values.toList(),
       message:
-          '${discovered.length} account${discovered.length == 1 ? '' : 's'} found, ${purchases.length} transaction${purchases.length == 1 ? '' : 's'} imported from Outlook',
+          '$total Outlook emails checked; ${purchases.length} bank transactions found',
     );
+  }
+
+  List<Purchase> _parseOutlookMessage(
+    Map<String, dynamic> message,
+    List<CreditCard> knownCards,
+    Map<String, CreditCard> discovered,
+    Set<String> excludedMessageIds,
+    DateTime? until,
+  ) {
+    final id = message['id']?.toString();
+    if (id == null || excludedMessageIds.contains(id)) return [];
+    final received =
+        DateTime.tryParse(message['receivedDateTime']?.toString() ?? '') ??
+        DateTime.now();
+    if (until != null && !received.isBefore(until)) return [];
+    final sender =
+        ((message['from'] as Map?)?['emailAddress'] as Map?)?['address']
+            ?.toString() ??
+        '';
+    final subject = message['subject']?.toString() ?? '';
+    final body = ((message['body'] as Map?)?['content']?.toString() ?? '');
+    final transactions = parseBankEmailText(
+      sender: sender,
+      subject: subject,
+      text: body,
+      fallback: received,
+    );
+    final purchases = <Purchase>[];
+    for (final transaction in transactions) {
+      final card =
+          _matchingCard(knownCards, transaction) ?? _newCard(transaction);
+      if (!knownCards.any((item) => item.id == card.id)) {
+        knownCards.add(card);
+        discovered[card.id] = card;
+      }
+      final related = transaction.counterpartyLastFour == null
+          ? null
+          : _matchingCard(
+              knownCards,
+              BankTransaction(
+                lastFour: transaction.counterpartyLastFour!,
+                bank: transaction.bank,
+                amount: transaction.amount,
+                currency: transaction.currency,
+                merchant: transaction.merchant,
+                date: transaction.date,
+                accountType: AccountType.debit,
+              ),
+            );
+      purchases.add(
+        Purchase(
+          id: newId('outlook'),
+          cardId: card.id,
+          merchant: transaction.merchant,
+          amount: transaction.amount,
+          purchasedAt: transaction.date,
+          source: PurchaseSource.email,
+          subject: subject,
+          sourceMessageId: id,
+          kind: transaction.kind,
+          category: transaction.category,
+          currency: transaction.currency,
+          transferReference: transaction.transferReference,
+          relatedCardId: related?.id,
+        ),
+      );
+    }
+    return purchases;
   }
 
   CreditCard? _matchingCard(
@@ -300,12 +367,9 @@ class OutlookAuthService {
     needsReview: true,
   );
 
-  Future<http.Response> _messagesRequest(
-    String token,
-    Map<String, String> query,
-  ) => http
+  Future<http.Response> _messagesRequest(String token, Uri uri) => http
       .get(
-        Uri.https('graph.microsoft.com', '/v1.0/me/messages', query),
+        uri,
         headers: {
           'Authorization': 'Bearer $token',
           'Prefer': 'outlook.body-content-type="text"',

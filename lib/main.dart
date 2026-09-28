@@ -334,6 +334,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   void initState() {
     super.initState();
     widget.emailSync.status.addListener(_syncStatusChanged);
+    _outlookAuth.status.addListener(_syncStatusChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _refreshReminders();
       await _configureBackgroundSync();
@@ -378,6 +379,8 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   @override
   void dispose() {
     widget.emailSync.status.removeListener(_syncStatusChanged);
+    _outlookAuth.status.removeListener(_syncStatusChanged);
+    _outlookAuth.status.dispose();
     super.dispose();
   }
 
@@ -480,6 +483,10 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         onCalibrate: _showCalibrationSheet,
         onImportStatements: _showStatementImportSheet,
         syncing: _syncing,
+        syncStatus:
+            data.settings.connectedEmailProvider == EmailProvider.outlook
+            ? _outlookAuth.status.value
+            : widget.emailSync.status.value,
       ),
       CardsView(
         data: data,
@@ -488,6 +495,10 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         onImportStatements: _showStatementImportSheet,
         onSyncEmail: _syncEmail,
         syncing: _syncing,
+        syncStatus:
+            data.settings.connectedEmailProvider == EmailProvider.outlook
+            ? _outlookAuth.status.value
+            : widget.emailSync.status.value,
         onEditLoan: _showLoanSheet,
         onAddLoan: () => _showLoanSheet(),
       ),
@@ -2322,8 +2333,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
           emailSyncEnabled: true,
           connectedEmailProvider: EmailProvider.outlook,
           connectedEmail: email,
-          lastEmailSyncStatus:
-              'Outlook connected. Transaction import is being enabled next.',
+          lastEmailSyncStatus: 'Outlook connected. Ready to sync email.',
         ),
       );
       await _saveAndRefresh();
@@ -2377,6 +2387,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   Future<void> _syncGmail() async {
     if (_syncing) return;
     setState(() => _syncing = true);
+    final syncStartedAt = DateTime.now();
     try {
       if (!await widget.emailSync.hasGoogleAccess()) {
         setState(() => _syncing = false);
@@ -2397,7 +2408,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         widget.store.data.settings.copyWith(
           emailSyncEnabled: true,
           connectedEmail: result.accountEmail,
-          lastEmailSyncAt: DateTime.now(),
+          lastEmailSyncAt: syncStartedAt,
           lastEmailSyncStatus: imported == 0
               ? result.message
               : '$imported transactions imported',
@@ -2410,6 +2421,12 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
       );
     } catch (error) {
       if (!mounted) return;
+      await widget.store.updateSettings(
+        data.settings.copyWith(
+          lastEmailSyncStatus: 'Gmail sync failed: $error',
+        ),
+      );
+      setState(() {});
       _snack('Gmail sync failed: $error');
     } finally {
       if (mounted) setState(() => _syncing = false);
@@ -2458,6 +2475,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
   }) async {
     if (_syncing) return;
     setState(() => _syncing = true);
+    final syncStartedAt = DateTime.now();
     try {
       final previousCount = data.purchases.length;
       final result = await _outlookAuth.syncRecentPurchases(
@@ -2465,24 +2483,45 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         since: since,
         until: until,
         excludedMessageIds: _excludedEmailMessageIds(),
+        onBatch: (batch) =>
+            _saveEmailBatch(batch, allowDiscovery: allowDiscovery),
       );
-      await _saveEmailBatch(result, allowDiscovery: allowDiscovery);
       final imported = data.purchases.length - previousCount;
+      final recognized = result.purchases
+          .where(
+            (item) => data.purchases.any(
+              (saved) => saved.sourceMessageId == item.sourceMessageId,
+            ),
+          )
+          .length;
+      final status = imported == 0
+          ? result.purchases.isNotEmpty
+                ? recognized > 0
+                      ? '${result.message}. Your accounts are up to date.'
+                      : '${result.message}. No alerts matched your saved accounts.'
+                : result.message
+          : '$imported new transactions. ${result.message}.';
       await widget.store.updateSettings(
         data.settings.copyWith(
           emailSyncEnabled: true,
           connectedEmailProvider: EmailProvider.outlook,
           connectedEmail: result.accountEmail,
-          lastEmailSyncAt: DateTime.now(),
-          lastEmailSyncStatus: imported == 0
-              ? result.message
-              : '$imported transactions imported',
+          lastEmailSyncAt: until == null ? syncStartedAt : null,
+          lastEmailSyncStatus: status,
         ),
       );
       await _saveAndRefresh();
-      if (mounted) _snack(result.message);
+      if (mounted) _snack(status);
     } catch (error) {
-      if (mounted) _snack('Outlook import failed: $error');
+      await widget.store.updateSettings(
+        data.settings.copyWith(
+          lastEmailSyncStatus: 'Outlook sync failed: $error',
+        ),
+      );
+      if (mounted) {
+        setState(() {});
+        _snack('Outlook sync failed: $error');
+      }
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
@@ -2546,7 +2585,6 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         widget.store.data.settings.copyWith(
           emailSyncEnabled: true,
           connectedEmail: result.accountEmail,
-          lastEmailSyncAt: DateTime.now(),
           lastEmailSyncStatus:
               '${result.discoveredCards.length} card${result.discoveredCards.length == 1 ? '' : 's'} found, '
               '$imported purchase${imported == 1 ? '' : 's'} imported',
@@ -2618,6 +2656,7 @@ class DashboardView extends StatelessWidget {
     required this.onCalibrate,
     required this.onImportStatements,
     required this.syncing,
+    required this.syncStatus,
   });
 
   final DebtAppData data;
@@ -2630,6 +2669,7 @@ class DashboardView extends StatelessWidget {
   final VoidCallback onCalibrate;
   final VoidCallback onImportStatements;
   final bool syncing;
+  final String syncStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -2649,6 +2689,7 @@ class DashboardView extends StatelessWidget {
           onApplyPlan: onApplyPlan,
           onSyncEmail: onSyncEmail,
           syncing: syncing,
+          syncStatus: syncStatus,
         ),
         const SizedBox(height: 12),
         _PaymentSplitCalculator(
@@ -2877,6 +2918,7 @@ class _DashboardHero extends StatelessWidget {
     required this.onApplyPlan,
     required this.onSyncEmail,
     required this.syncing,
+    required this.syncStatus,
   });
 
   final DebtAppData data;
@@ -2885,6 +2927,7 @@ class _DashboardHero extends StatelessWidget {
   final VoidCallback onApplyPlan;
   final VoidCallback onSyncEmail;
   final bool syncing;
+  final String syncStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -3023,6 +3066,20 @@ class _DashboardHero extends StatelessWidget {
                 ),
               ),
             ),
+            if (syncing && syncStatus.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                syncStatus,
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ],
+            if (!syncing && data.settings.lastEmailSyncStatus != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                data.settings.lastEmailSyncStatus!,
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ],
           ],
         ],
       ),
@@ -3426,6 +3483,7 @@ class CardsView extends StatelessWidget {
     required this.onImportStatements,
     required this.onSyncEmail,
     required this.syncing,
+    required this.syncStatus,
     required this.onEditLoan,
     required this.onAddLoan,
   });
@@ -3436,6 +3494,7 @@ class CardsView extends StatelessWidget {
   final VoidCallback onImportStatements;
   final VoidCallback onSyncEmail;
   final bool syncing;
+  final String syncStatus;
   final ValueChanged<Loan> onEditLoan;
   final VoidCallback onAddLoan;
 
@@ -3470,6 +3529,17 @@ class CardsView extends StatelessWidget {
               : const Icon(Icons.sync),
           label: Text(syncing ? 'Updating from email...' : 'Update from email'),
         ),
+        if (syncing && syncStatus.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(syncStatus, style: const TextStyle(color: _muted, fontSize: 12)),
+        ],
+        if (!syncing && data.settings.lastEmailSyncStatus != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            data.settings.lastEmailSyncStatus!,
+            style: const TextStyle(color: _muted, fontSize: 12),
+          ),
+        ],
         const SizedBox(height: 12),
         if (data.cards.isEmpty)
           const _EmptyPanel(

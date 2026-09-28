@@ -106,8 +106,10 @@ class GmailPurchaseSyncService {
   static bool _syncActive = false;
   final status = ValueNotifier<String>('');
 
-  Future<T> _request<T>(Future<T> Function() call) =>
-      _requests.run(call, onStatus: (value) => status.value = value);
+  Future<T> _request<T>(Future<T> Function() call) => _requests.run(
+    () => call().timeout(const Duration(seconds: 30)),
+    onStatus: (value) => status.value = value,
+  );
 
   final FlutterSecureStorage _storage;
 
