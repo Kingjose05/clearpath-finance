@@ -19,6 +19,7 @@ class ReminderNotificationService {
   bool _initialized = false;
 
   Future<void> initialize() async {
+    if (kIsWeb) return;
     if (_initialized) return;
     tz_data.initializeTimeZones();
     await _setLocalTimezone();
@@ -41,8 +42,8 @@ class ReminderNotificationService {
   }
 
   Future<bool> requestPermission() async {
-    await initialize();
     if (kIsWeb) return true;
+    await initialize();
 
     final android = await _plugin
         .resolvePlatformSpecificImplementation<
@@ -69,8 +70,8 @@ class ReminderNotificationService {
     required AppSettings settings,
     required PaymentPlan plan,
   }) async {
-    await initialize();
     if (kIsWeb) return;
+    await initialize();
     await _cancelCardReminders(cards);
     await _cancelLoanReminders(loans);
     if (!settings.notificationsEnabled) return;
@@ -108,6 +109,7 @@ class ReminderNotificationService {
   }
 
   Future<void> showTestReminder() async {
+    if (kIsWeb) return;
     await initialize();
     await _plugin.show(
       id: 999901,
