@@ -238,4 +238,153 @@ void main() {
       expect(store.data.purchases.single.kind, TransactionKind.transferOut);
     },
   );
+
+  test('historical email imports do not change calibrated balances', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final store = AppStore(prefs);
+    await store.load();
+    await store.upsertCard(
+      const CreditCard(
+        id: 'debit',
+        name: 'Bank account',
+        lastFour: '1234',
+        balance: 1000,
+        creditLimit: 0,
+        apr: 0,
+        cutoffDay: 1,
+        dueDay: 1,
+        minimumDue: 0,
+        accentColor: 0,
+        accountType: AccountType.debit,
+      ),
+    );
+    await store.updateSettings(
+      store.data.settings.copyWith(lastCalibrationAt: DateTime(2026, 9, 20)),
+    );
+    final before = Purchase(
+      id: 'before',
+      cardId: 'debit',
+      merchant: 'Old purchase',
+      amount: 100,
+      purchasedAt: DateTime(2026, 9, 19),
+      source: PurchaseSource.email,
+      sourceMessageId: 'old-email',
+    );
+    final after = before.copyWith(
+      id: 'after',
+      purchasedAt: DateTime(2026, 9, 21),
+      sourceMessageId: 'new-email',
+    );
+    expect(await store.importPurchases([before]), 1);
+    expect(store.data.cardById('debit')!.balance, 1000);
+    expect(await store.importPurchases([after]), 1);
+    expect(store.data.cardById('debit')!.balance, 900);
+    expect(await store.importPurchases([before, after]), 0);
+    expect(store.data.cardById('debit')!.balance, 900);
+    expect(store.data.purchases, hasLength(2));
+  });
+
+  test('unrelated transfers with equal amounts remain separate', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final store = AppStore(prefs);
+    await store.load();
+    for (final card in const [
+      CreditCard(
+        id: 'first',
+        name: 'First',
+        lastFour: '1111',
+        balance: 500,
+        creditLimit: 0,
+        apr: 0,
+        cutoffDay: 1,
+        dueDay: 1,
+        minimumDue: 0,
+        accentColor: 0,
+        accountType: AccountType.debit,
+      ),
+      CreditCard(
+        id: 'second',
+        name: 'Second',
+        lastFour: '2222',
+        balance: 500,
+        creditLimit: 0,
+        apr: 0,
+        cutoffDay: 1,
+        dueDay: 1,
+        minimumDue: 0,
+        accentColor: 0,
+        accountType: AccountType.debit,
+      ),
+    ]) {
+      await store.upsertCard(card);
+    }
+    final outbound = Purchase(
+      id: 'out',
+      cardId: 'first',
+      merchant: 'Transfer',
+      amount: 100,
+      purchasedAt: DateTime(2026, 9, 21),
+      source: PurchaseSource.email,
+      sourceMessageId: 'out-mail',
+      kind: TransactionKind.transferOut,
+    );
+    final inbound = outbound.copyWith(
+      id: 'in',
+      cardId: 'second',
+      sourceMessageId: 'in-mail',
+      kind: TransactionKind.transferIn,
+    );
+    expect(await store.importPurchases([outbound, inbound]), 2);
+    expect(store.data.cardById('first')!.balance, 400);
+    expect(store.data.cardById('second')!.balance, 600);
+    expect(store.data.purchases, hasLength(2));
+  });
+
+  test(
+    'bank email confirms a manual card payment without paying twice',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = AppStore(prefs);
+      await store.load();
+      await store.upsertCard(
+        const CreditCard(
+          id: 'credit',
+          name: 'Credit card',
+          lastFour: '1234',
+          balance: 500,
+          creditLimit: 1000,
+          apr: 45,
+          cutoffDay: 1,
+          dueDay: 15,
+          minimumDue: 30,
+          accentColor: 0,
+        ),
+      );
+      final manual = Purchase(
+        id: 'manual-payment',
+        cardId: 'credit',
+        merchant: 'Card payment',
+        amount: 100,
+        purchasedAt: DateTime(2026, 9, 21),
+        source: PurchaseSource.manual,
+        kind: TransactionKind.cardPayment,
+      );
+      await store.addPurchase(manual);
+      expect(store.data.cardById('credit')!.balance, 400);
+      final email = manual.copyWith(
+        id: 'email-payment',
+        source: PurchaseSource.email,
+        sourceMessageId: 'bank-confirmation',
+        purchasedAt: DateTime(2026, 9, 22),
+      );
+      expect(await store.importPurchases([email]), 0);
+      expect(await store.importPurchases([email]), 0);
+      expect(store.data.cardById('credit')!.balance, 400);
+      expect(store.data.purchases, hasLength(1));
+      expect(store.data.purchases.single.sourceMessageId, 'bank-confirmation');
+    },
+  );
 }

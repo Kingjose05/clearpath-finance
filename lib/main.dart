@@ -39,7 +39,6 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
   final store = AppStore(prefs);
-  await store.load();
   if (!kIsWeb) {
     BackgroundFetch.registerHeadlessTask(backgroundFetchHeadlessTask);
   }
@@ -47,6 +46,7 @@ Future<void> main() async {
   runApp(
     AppLockGate(
       preferences: prefs,
+      store: store,
       child: DebtPlannerApp(
         store: store,
         planner: const PaymentPlanner(),
@@ -62,10 +62,12 @@ class AppLockGate extends StatefulWidget {
   const AppLockGate({
     super.key,
     required this.preferences,
+    required this.store,
     required this.child,
   });
 
   final SharedPreferences preferences;
+  final AppStore store;
   final Widget child;
 
   @override
@@ -83,7 +85,9 @@ class _AppLockGateState extends State<AppLockGate> {
   @override
   void initState() {
     super.initState();
-    _hasPasscode = widget.preferences.getString(_key)?.isNotEmpty == true;
+    _hasPasscode =
+        widget.preferences.getString(_key)?.isNotEmpty == true ||
+        (kIsWeb && widget.store.hasEncryptedWebData);
     _loading = false;
   }
 
@@ -95,17 +99,40 @@ class _AppLockGateState extends State<AppLockGate> {
 
   Future<void> _continue() async {
     final value = _passcode.text.trim();
-    if (value.length < 4) {
-      setState(() => _error = 'Use at least 4 characters.');
+    final minimumLength = _hasPasscode ? 4 : 8;
+    if (value.length < minimumLength) {
+      setState(() => _error = 'Use at least $minimumLength characters.');
       return;
     }
     final hash = sha256.convert(utf8.encode(value)).toString();
-    if (_hasPasscode && widget.preferences.getString(_key) != hash) {
+    final existingHash = widget.preferences.getString(_key);
+    if (_hasPasscode && existingHash != null && existingHash != hash) {
       setState(() => _error = 'That passcode is not correct.');
       return;
     }
-    if (!_hasPasscode) await widget.preferences.setString(_key, hash);
-    if (mounted) setState(() => _unlocked = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await widget.store.unlockWithPasscode(value);
+      await widget.store.load();
+      if (kIsWeb) {
+        // The encrypted state verifies future unlocks without a weak hash.
+        await widget.preferences.remove(_key);
+      } else if (!_hasPasscode) {
+        await widget.preferences.setString(_key, hash);
+      }
+      if (mounted) setState(() => _unlocked = true);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error = 'Could not unlock saved data. Check your passcode.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
@@ -178,7 +205,9 @@ class _AppLockGateState extends State<AppLockGate> {
                           ),
                           const SizedBox(height: 14),
                           const Text(
-                            'Your financial data and connected-email tokens stay on this device. This passcode is never sent to ClearPath.',
+                            kIsWeb
+                                ? 'Your financial data is encrypted in this browser with your passcode. Clearing browser data removes it. Email access is stored separately on this device.'
+                                : 'Your financial data and connected-email tokens stay on this device. This passcode is never sent to ClearPath.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: _muted, fontSize: 12),
                           ),
@@ -477,7 +506,8 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         plan: plan,
         onAddPaycheck: _showPaycheckSheet,
         onSavePaycheck: _savePaycheckAmount,
-        onApplyPlan: _applyCurrentPlan,
+        onRecordPayment: () =>
+            _showPurchaseSheet(initialKind: TransactionKind.cardPayment),
         onAddPurchase: () => _showPurchaseSheet(),
         onSyncEmail: _syncEmail,
         onCalibrate: _showCalibrationSheet,
@@ -515,6 +545,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         syncStatus: widget.emailSync.status.value,
         onNotificationsChanged: _setNotificationsEnabled,
         onTestNotification: _testNotification,
+        onExportCalendar: _exportPaymentCalendar,
         onBackgroundEmailSyncChanged: _setBackgroundEmailSyncEnabled,
         onConnectEmail: _showEmailProviderSheet,
         onEmailSync: _syncEmail,
@@ -655,27 +686,26 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
     if (mounted) _snack('Paycheck saved. Payment split updated.');
   }
 
-  Future<void> _applyCurrentPlan() async {
-    if (plan.allocations.isEmpty || plan.allocatedAmount <= 0) {
-      _snack('No payment allocation is available yet.');
-      return;
-    }
-    await widget.store.applyPaymentPlan(plan);
-    await _saveAndRefresh();
-    if (!mounted) return;
-    _snack('Suggested payments were applied to your balances.');
-  }
-
-  Future<void> _showPurchaseSheet({CreditCard? initialCard}) async {
+  Future<void> _showPurchaseSheet({
+    CreditCard? initialCard,
+    TransactionKind initialKind = TransactionKind.purchase,
+  }) async {
     if (data.cards.isEmpty) {
       _snack('Add one of your real accounts before adding transactions.');
       await _showCardSheet();
       return;
     }
-    var selectedCard = initialCard ?? data.cards.first;
-    var selectedKind = TransactionKind.purchase;
+    var selectedCard =
+        initialCard ??
+        (initialKind == TransactionKind.cardPayment
+            ? data.cards.where((card) => card.isCredit).firstOrNull ??
+                  data.cards.first
+            : data.cards.first);
+    var selectedKind = initialKind;
     var selectedCategory = SpendingCategory.other;
-    final merchantController = TextEditingController();
+    final merchantController = TextEditingController(
+      text: initialKind == TransactionKind.cardPayment ? 'Card payment' : '',
+    );
     final amountController = TextEditingController();
     final submitted = await showModalBottomSheet<bool>(
       context: context,
@@ -773,6 +803,7 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
         amount: amount,
         purchasedAt: DateTime.now(),
         source: PurchaseSource.manual,
+        currency: selectedCard.currency,
         kind: selectedKind,
         category: selectedKind == TransactionKind.withdrawal
             ? SpendingCategory.cash
@@ -2287,9 +2318,8 @@ class _DebtPlannerHomeState extends State<DebtPlannerHome> {
               ListTile(
                 leading: const Icon(Icons.cloud_outlined, color: _muted),
                 title: const Text('iCloud Mail'),
-                subtitle: const Text('Apple-authorized mail connection'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.pop(context, EmailProvider.icloud),
+                subtitle: const Text('Not available yet'),
+                enabled: false,
               ),
             ],
           ),
@@ -2650,7 +2680,7 @@ class DashboardView extends StatelessWidget {
     required this.plan,
     required this.onAddPaycheck,
     required this.onSavePaycheck,
-    required this.onApplyPlan,
+    required this.onRecordPayment,
     required this.onAddPurchase,
     required this.onSyncEmail,
     required this.onCalibrate,
@@ -2663,7 +2693,7 @@ class DashboardView extends StatelessWidget {
   final PaymentPlan plan;
   final VoidCallback onAddPaycheck;
   final ValueChanged<double> onSavePaycheck;
-  final VoidCallback onApplyPlan;
+  final VoidCallback onRecordPayment;
   final VoidCallback onAddPurchase;
   final VoidCallback onSyncEmail;
   final VoidCallback onCalibrate;
@@ -2686,7 +2716,7 @@ class DashboardView extends StatelessWidget {
           data: data,
           plan: plan,
           onAddPaycheck: onAddPaycheck,
-          onApplyPlan: onApplyPlan,
+          onRecordPayment: onRecordPayment,
           onSyncEmail: onSyncEmail,
           syncing: syncing,
           syncStatus: syncStatus,
@@ -2856,9 +2886,7 @@ class _PaymentSplitCalculatorState extends State<_PaymentSplitCalculator> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: _SplitSummary(
-                    label: preview.coversMinimums
-                        ? 'Extra avalanche'
-                        : 'Shortfall',
+                    label: preview.coversMinimums ? 'Unallocated' : 'Shortfall',
                     value: _money.format(
                       preview.coversMinimums
                           ? preview.unallocatedAmount
@@ -2915,7 +2943,7 @@ class _DashboardHero extends StatelessWidget {
     required this.data,
     required this.plan,
     required this.onAddPaycheck,
-    required this.onApplyPlan,
+    required this.onRecordPayment,
     required this.onSyncEmail,
     required this.syncing,
     required this.syncStatus,
@@ -2924,7 +2952,7 @@ class _DashboardHero extends StatelessWidget {
   final DebtAppData data;
   final PaymentPlan plan;
   final VoidCallback onAddPaycheck;
-  final VoidCallback onApplyPlan;
+  final VoidCallback onRecordPayment;
   final VoidCallback onSyncEmail;
   final bool syncing;
   final String syncStatus;
@@ -3029,10 +3057,12 @@ class _DashboardHero extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               IconButton.filled(
-                tooltip: 'Apply suggested payments',
-                onPressed: plan.allocations.isEmpty ? null : onApplyPlan,
+                tooltip: 'Record a card payment you made',
+                onPressed: data.cards.any((card) => card.isCredit)
+                    ? onRecordPayment
+                    : null,
                 style: IconButton.styleFrom(
-                  backgroundColor: plan.coversMinimums ? _teal : _coral,
+                  backgroundColor: _teal,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
@@ -4620,6 +4650,7 @@ class SettingsView extends StatelessWidget {
     this.syncStatus = '',
     required this.onNotificationsChanged,
     required this.onTestNotification,
+    required this.onExportCalendar,
     required this.onBackgroundEmailSyncChanged,
     required this.onConnectEmail,
     required this.onEmailSync,
@@ -4634,6 +4665,7 @@ class SettingsView extends StatelessWidget {
   final String syncStatus;
   final ValueChanged<bool> onNotificationsChanged;
   final VoidCallback onTestNotification;
+  final VoidCallback onExportCalendar;
   final ValueChanged<bool> onBackgroundEmailSyncChanged;
   final VoidCallback onConnectEmail;
   final VoidCallback onEmailSync;
@@ -4651,28 +4683,42 @@ class SettingsView extends StatelessWidget {
         const _SectionHeader(title: 'Settings'),
         const SizedBox(height: 10),
         _Panel(
-          child: Column(
-            children: [
-              SwitchListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                title: const Text(
-                  'Due-date reminders',
-                  style: TextStyle(fontWeight: FontWeight.w800),
+          child: kIsWeb
+              ? ListTile(
+                  leading: const Icon(Icons.calendar_month_outlined),
+                  title: const Text('Export payment calendar'),
+                  subtitle: const Text(
+                    'Browser reminders are not available. Add the exported dates to your calendar for alerts.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: onExportCalendar,
+                )
+              : Column(
+                  children: [
+                    SwitchListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                      ),
+                      title: const Text(
+                        'Due-date reminders',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: const Text(
+                        'Suggested payment near each due date',
+                      ),
+                      value: settings.notificationsEnabled,
+                      activeThumbColor: _teal,
+                      onChanged: onNotificationsChanged,
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.notifications_active_outlined),
+                      title: const Text('Send test reminder'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: onTestNotification,
+                    ),
+                  ],
                 ),
-                subtitle: const Text('Suggested payment near each due date'),
-                value: settings.notificationsEnabled,
-                activeThumbColor: _teal,
-                onChanged: onNotificationsChanged,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.notifications_active_outlined),
-                title: const Text('Send test reminder'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: onTestNotification,
-              ),
-            ],
-          ),
         ),
         const SizedBox(height: 18),
         const _SectionHeader(title: 'Email sync'),
@@ -4695,7 +4741,7 @@ class SettingsView extends StatelessWidget {
                   settings.emailSyncEnabled && settings.lastEmailSyncAt == null
                       ? 'Connected with ${_emailProviderLabel(settings.connectedEmailProvider)}'
                       : settings.lastEmailSyncAt == null
-                      ? 'Choose Gmail, Outlook, or iCloud Mail'
+                      ? 'Choose Gmail or Outlook'
                       : 'Last sync ${_dateShort.format(settings.lastEmailSyncAt!)}',
                 ),
               ),

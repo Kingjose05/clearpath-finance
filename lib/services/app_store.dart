@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models.dart';
-import 'payment_planner.dart';
+import 'local_data_cipher.dart';
 
 class AppStore {
   AppStore(this._prefs);
@@ -12,34 +13,53 @@ class AppStore {
   static const _storageKey = 'card_debt_planner_state_v1';
 
   final SharedPreferences _prefs;
+  final LocalDataCipher _cipher = LocalDataCipher();
 
   DebtAppData _data = emptyDebtData();
 
   DebtAppData get data => _data;
+  bool get hasEncryptedWebData =>
+      LocalDataCipher.isEncrypted(_prefs.getString(_storageKey));
+
+  Future<void> unlockWithPasscode(String passcode) async {
+    if (kIsWeb) await _cipher.unlock(_prefs, passcode);
+  }
 
   Future<void> load() async {
-    final raw = _prefs.getString(_storageKey);
-    if (raw == null) {
+    final stored = _prefs.getString(_storageKey);
+    if (kIsWeb && !_cipher.isUnlocked) {
+      throw StateError('Unlock local data before loading it.');
+    }
+    if (stored == null) {
       _data = emptyDebtData();
       await save();
       return;
     }
+    final wasPlainWeb = kIsWeb && !LocalDataCipher.isEncrypted(stored);
     try {
+      final raw = wasPlainWeb || !kIsWeb
+          ? stored
+          : await _cipher.decrypt(stored);
       _data = DebtAppData.fromJson(
         Map<String, Object?>.from(jsonDecode(raw) as Map),
       );
       if (_isBundledSampleData(_data)) {
         _data = emptyDebtData(settings: _data.settings);
         await save();
+      } else if (wasPlainWeb) {
+        await save();
       }
-    } catch (_) {
-      _data = emptyDebtData();
-      await save();
+    } catch (error) {
+      throw StateError('Could not unlock saved data: $error');
     }
   }
 
   Future<void> save() async {
-    await _prefs.setString(_storageKey, jsonEncode(_data.toJson()));
+    final plain = jsonEncode(_data.toJson());
+    await _prefs.setString(
+      _storageKey,
+      kIsWeb ? await _cipher.encrypt(plain) : plain,
+    );
   }
 
   Future<void> clearData() async {
@@ -137,6 +157,11 @@ class AppStore {
     var savedPurchases = [..._data.purchases];
     var logicalImports = 0;
     var changed = false;
+    final calibration = _data.settings.lastCalibrationAt;
+    bool affectsBalance(Purchase purchase) =>
+        purchase.source != PurchaseSource.email ||
+        calibration == null ||
+        purchase.purchasedAt.isAfter(calibration);
     for (final purchase in purchases) {
       final existingMessageIndex = purchase.sourceMessageId == null
           ? -1
@@ -148,8 +173,10 @@ class AppStore {
         // Re-read a notification that an older parser treated as a purchase.
         // Remove its one-sided effect before applying the two-sided transfer.
         if (!existing.isTransfer && purchase.isTransfer) {
-          cards = _revertPurchaseFromCards(cards, existing);
-          cards = _applyPurchaseToCards(cards, purchase);
+          if (affectsBalance(existing)) {
+            cards = _revertPurchaseFromCards(cards, existing);
+            cards = _applyPurchaseToCards(cards, purchase);
+          }
           savedPurchases[existingMessageIndex] = purchase;
           changed = true;
           continue;
@@ -164,14 +191,16 @@ class AppStore {
           final oppositeKind = purchase.kind == TransactionKind.transferOut
               ? TransactionKind.transferIn
               : TransactionKind.transferOut;
-          cards = _applyPurchaseToCards(
-            cards,
-            purchase.copyWith(
-              cardId: purchase.relatedCardId!,
-              kind: oppositeKind,
-              clearRelatedCardId: true,
-            ),
-          );
+          if (affectsBalance(purchase)) {
+            cards = _applyPurchaseToCards(
+              cards,
+              purchase.copyWith(
+                cardId: purchase.relatedCardId!,
+                kind: oppositeKind,
+                clearRelatedCardId: true,
+              ),
+            );
+          }
           savedPurchases[existingMessageIndex] = existing.copyWith(
             relatedCardId: purchase.relatedCardId,
           );
@@ -179,14 +208,48 @@ class AppStore {
         }
         continue;
       }
-      final matchingIndex = _matchingTransferIndex(savedPurchases, purchase);
+      if (purchase.source == PurchaseSource.email &&
+          purchase.sourceMessageId != null &&
+          purchase.kind == TransactionKind.cardPayment &&
+          affectsBalance(purchase)) {
+        final matches = <int>[];
+        for (var index = 0; index < savedPurchases.length; index++) {
+          final saved = savedPurchases[index];
+          if (saved.source == PurchaseSource.manual &&
+              saved.sourceMessageId == null &&
+              saved.kind == TransactionKind.cardPayment &&
+              saved.cardId == purchase.cardId &&
+              saved.currency == purchase.currency &&
+              (saved.amount - purchase.amount).abs() <= 0.01 &&
+              (calibration == null || saved.purchasedAt.isAfter(calibration)) &&
+              saved.purchasedAt.difference(purchase.purchasedAt).abs() <=
+                  const Duration(days: 2)) {
+            matches.add(index);
+          }
+        }
+        if (matches.length == 1) {
+          final index = matches.single;
+          savedPurchases[index] = savedPurchases[index].copyWith(
+            sourceMessageId: purchase.sourceMessageId,
+          );
+          changed = true;
+          continue;
+        }
+      }
+      final matchingIndex = _matchingTransferIndex(
+        savedPurchases,
+        purchase,
+        calibration: calibration,
+      );
       if (matchingIndex != -1) {
         final existing = savedPurchases[matchingIndex];
         // The first email may have been one-sided. Apply the missing account
         // leg when the second bank email arrives, but keep one logical record.
         if (existing.relatedCardId == null &&
             existing.cardId != purchase.cardId) {
-          cards = _applyPurchaseToCards(cards, purchase, applyRelated: false);
+          if (affectsBalance(purchase)) {
+            cards = _applyPurchaseToCards(cards, purchase, applyRelated: false);
+          }
           savedPurchases[matchingIndex] = existing.copyWith(
             relatedCardId: purchase.cardId,
           );
@@ -194,7 +257,9 @@ class AppStore {
         }
         continue;
       }
-      cards = _applyPurchaseToCards(cards, purchase);
+      if (affectsBalance(purchase)) {
+        cards = _applyPurchaseToCards(cards, purchase);
+      }
       savedPurchases = [purchase, ...savedPurchases];
       logicalImports++;
       changed = true;
@@ -208,50 +273,6 @@ class AppStore {
 
   Future<void> addPaycheck(Paycheck paycheck) async {
     _data = _data.copyWith(paychecks: [paycheck, ..._data.paychecks]);
-    await save();
-  }
-
-  Future<void> applyPaymentPlan(PaymentPlan plan) async {
-    final now = DateTime.now();
-    final paymentRecords = <CardPayment>[];
-    final cards = _data.cards.map((card) {
-      final allocation = plan.allocationForCard(card.id);
-      if (allocation == null || allocation.totalAmount <= 0) return card;
-      final paymentAmount = math.min(card.totalOwed, allocation.nativeAmount);
-      final revolvingPayment = math.min(card.balance, paymentAmount);
-      final installmentPayment = math.min(
-        card.installmentBalance,
-        paymentAmount - revolvingPayment,
-      );
-      paymentRecords.add(
-        CardPayment(
-          id: newId('pay'),
-          cardId: card.id,
-          amount: paymentAmount,
-          paidAt: now,
-          note: allocation.reason,
-        ),
-      );
-      return card.copyWith(
-        balance: math.max(0, card.balance - revolvingPayment),
-        installmentBalance: math.max(
-          0,
-          card.installmentBalance - installmentPayment,
-        ),
-        lastPaymentDate: now,
-      );
-    }).toList();
-    final loans = _data.loans.map((loan) {
-      final allocation = plan.allocationForLoan(loan.id);
-      if (allocation == null || allocation.totalAmount <= 0) return loan;
-      final paymentAmount = math.min(loan.balance, allocation.nativeAmount);
-      return loan.copyWith(balance: math.max(0, loan.balance - paymentAmount));
-    }).toList();
-    _data = _data.copyWith(
-      cards: cards,
-      loans: loans,
-      payments: [...paymentRecords, ..._data.payments],
-    );
     await save();
   }
 }
@@ -351,7 +372,11 @@ String _lastFour(String value) {
   return digits.substring(digits.length - 4);
 }
 
-int _matchingTransferIndex(List<Purchase> purchases, Purchase candidate) {
+int _matchingTransferIndex(
+  List<Purchase> purchases,
+  Purchase candidate, {
+  DateTime? calibration,
+}) {
   if (!candidate.isTransfer) return -1;
   for (var index = 0; index < purchases.length; index++) {
     final existing = purchases[index];
@@ -359,6 +384,9 @@ int _matchingTransferIndex(List<Purchase> purchases, Purchase candidate) {
         existing.cardId == candidate.cardId ||
         existing.currency != candidate.currency ||
         (existing.amount - candidate.amount).abs() > 0.01 ||
+        (calibration != null &&
+            existing.purchasedAt.isAfter(calibration) !=
+                candidate.purchasedAt.isAfter(calibration)) ||
         existing.kind == candidate.kind) {
       continue;
     }
@@ -377,43 +405,9 @@ int _matchingTransferIndex(List<Purchase> purchases, Purchase candidate) {
         candidate.relatedCardId == existing.cardId) {
       return index;
     }
-    if (_relatedTransferDescriptions(existing.merchant, candidate.merchant)) {
-      return index;
-    }
-    // A same-day, same-currency, same-amount pair with opposite directions
-    // is the common bank-email fallback when neither bank exposes a reference.
-    return index;
+    // Do not merge unrelated transfers merely because amount and date match.
   }
   return -1;
-}
-
-bool _relatedTransferDescriptions(String left, String right) {
-  final ignored = {
-    'transfer',
-    'transferencia',
-    'received',
-    'recibida',
-    'recibido',
-    'incoming',
-    'outgoing',
-    'enviada',
-    'enviado',
-    'to',
-    'from',
-    'a',
-    'de',
-  };
-  final leftWords = left
-      .toLowerCase()
-      .split(RegExp(r'[^a-z0-9]+'))
-      .where((word) => word.length >= 4 && !ignored.contains(word))
-      .toSet();
-  final rightWords = right
-      .toLowerCase()
-      .split(RegExp(r'[^a-z0-9]+'))
-      .where((word) => word.length >= 4 && !ignored.contains(word))
-      .toSet();
-  return leftWords.intersection(rightWords).isNotEmpty;
 }
 
 double _balanceAfterTransaction(CreditCard account, Purchase transaction) {

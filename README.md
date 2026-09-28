@@ -6,8 +6,7 @@ debt payoff plans.
 
 ## Features
 
-- Provider picker for Gmail, Outlook/Microsoft 365, and iCloud Mail
-- Live read-only Gmail import with setup guidance for Outlook and iCloud
+- Read-only Gmail and Outlook/Microsoft 365 import; iCloud Mail is not available yet
 - Dominican-bank alert recognition with a generic structured-alert fallback
 - Credit and debit account detection from the last four digits in DOP or USD
 - Purchases, cash withdrawals, payments, refunds, salary, and incoming/outgoing transfers
@@ -15,7 +14,13 @@ debt payoff plans.
 - Loans with due dates, APRs, minimums, and reminders
 - Spending analytics by category, month, merchant, and weekday
 - Salary-percentage or fixed-budget debt payoff calendar with ICS reminder export
-- Local-only financial storage; each browser profile owns its own data
+- Web financial data encrypted locally with a passcode; each browser profile owns its own data
+
+Browser notifications and automatic background sync are not available on the
+static web deployment. Export the payment calendar for reminders. The local
+passcode is not a hosted account login, and clearing browser storage removes
+the data. Verify imported balances against bank statements before making
+financial decisions.
 
 ## Run locally
 
